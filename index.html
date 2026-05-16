@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>TON Rolls PvP</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@400;600;700&display=swap');
+
+  :root {
+    --bg: #0a0c14;
+    --surface: #111420;
+    --surface2: #181d2e;
+    --border: #1e2540;
+    --accent: #39FF14;
+    --accent2: #00E5FF;
+    --gold: #FFD700;
+    --text: #e8eaf6;
+    --muted: #5c6394;
+    --danger: #FF3131;
+    --purple: #D500F9;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .history-badge {
+    display: flex;
+    flex-direction: column;
+    font-size: 11px;
+    color: var(--muted);
+    max-width: 140px;
+  }
+  .history-badge span { font-size: 13px; font-weight: 700; color: var(--text); }
+  .history-badge .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+  .total-badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 13px;
+    color: var(--accent2);
+    text-align: center;
+  }
+
+  /* ── Wheel ── */
+  .wheel-section {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px 0 10px;
+  }
+
+  #wheelCanvas {
+    filter: drop-shadow(0 0 20px rgba(57,255,20,0.3));
+    border-radius: 50%;
+  }
+
+  .arrow {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 14px solid transparent;
+    border-right: 14px solid transparent;
+    border-top: 26px solid #ffffff;
+    filter: drop-shadow(0 0 6px rgba(255,255,255,0.8));
+    z-index: 10;
+  }
+
+  .timer-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 90px;
+    height: 90px;
+    background: radial-gradient(circle, #0a0c14 60%, #111420 100%);
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 22px;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: 1px;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  /* ── Bottom section ── */
+  .bottom {
+    padding: 12px 16px;
+  }
+
+  .balance-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .balance-row .icons { display: flex; gap: 12px; font-size: 20px; }
+  .balance-val {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 15px;
+    color: var(--accent2);
+    font-weight: 700;
+  }
+  .ton-icon {
+    width: 20px; height: 20px;
+    background: var(--accent2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #000; font-weight: 900;
+  }
+
+  .bet-buttons {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .bet-btn {
+    background: linear-gradient(135deg, #1a2040, #111827);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 4px;
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.18s ease;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .bet-btn .ton-small {
+    width: 16px; height: 16px;
+    background: var(--accent2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: #000; font-weight: 900;
+    margin-bottom: 2px;
+  }
+  .bet-btn:hover, .bet-btn:active {
+    background: linear-gradient(135deg, #1e2d5c, #1a2438);
+    border-color: var(--accent2);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,229,255,0.25);
+  }
+  .bet-btn.allin {
+    background: linear-gradient(135deg, #1a2f1a, #0d200d);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .bet-btn.allin:hover {
+    box-shadow: 0 4px 16px rgba(57,255,20,0.35);
+  }
+
+  /* ── Winner popup ── */
+  .popup-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .popup-overlay.show { opacity: 1; pointer-events: all; }
+
+  .popup {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 28px 24px;
+    text-align: center;
+    width: 280px;
+    box-shadow: 0 0 40px rgba(57,255,20,0.2), 0 20px 60px rgba(0,0,0,0.6);
+    transform: scale(0.8) translateY(20px);
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .popup-overlay.show .popup {
+    transform: scale(1) translateY(0);
+  }
+
+  .popup-game-id {
+    font-size: 11px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 16px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .popup-game-id button {
+    background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer;
+    line-height: 1;
+  }
+
+  .winner-avatar {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 3px solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+    margin: 0 auto 10px;
+    box-shadow: 0 0 20px rgba(57,255,20,0.4);
+  }
+  .winner-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 15px; font-weight: 700; color: var(--text);
+    margin-bottom: 2px;
+  }
+  .winner-label { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+
+  .prize-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px;
+    margin: 14px 0;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .prize-ton { display: flex; align-items: center; gap: 8px; }
+  .prize-icon { width: 36px; height: 36px; background: var(--accent2); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; color: #000; }
+  .prize-val { font-family: 'Orbitron', sans-serif; font-size: 20px; font-weight: 900; color: var(--accent2); }
+  .prize-sub { font-size: 12px; color: var(--muted); }
+
+  .popup-stats {
+    display: flex; gap: 8px; justify-content: center; margin-bottom: 16px;
+  }
+  .stat-chip {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  .stat-chip strong { display: block; font-family: 'Orbitron', sans-serif; font-size: 14px; color: var(--gold); }
+
+  .popup-done {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 15px; font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .popup-done:hover { background: var(--border); }
+
+  /* ── Tab Bar ── */
+  .tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-around;
+    padding: 8px 0 12px;
+    z-index: 50;
+  }
+  .tab {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10px; color: var(--muted);
+    cursor: pointer; padding: 4px 16px;
+    transition: color 0.2s;
+  }
+  .tab .icon { font-size: 22px; }
+  .tab.active { color: var(--accent2); }
+
+  .content { padding-bottom: 80px; }
+
+  /* glow pulse */
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(57,255,20,0.3); }
+    50% { box-shadow: 0 0 40px rgba(57,255,20,0.6), 0 0 60px rgba(57,255,20,0.2); }
+  }
+  #wheelCanvas { animation: glow-pulse 3s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<div class="content">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="history-badge">
+      <div class="label">Пред. игра</div>
+      <span id="lastGame">— TON</span>
+    </div>
+    <div class="total-badge">ВСЕГО <span id="totalPot">0.0</span> TON</div>
+    <div class="history-badge" style="text-align:right">
+      <div class="label">Топ игра</div>
+      <span id="topGame">— TON</span>
+    </div>
+  </div>
+
+  <!-- Wheel -->
+  <div class="wheel-section">
+    <div class="arrow"></div>
+    <canvas id="wheelCanvas" width="280" height="280"></canvas>
+    <div class="timer-ring" id="timerDisplay">20</div>
+  </div>
+
+  <!-- Bottom controls -->
+  <div class="bottom">
+    <div class="balance-row">
+      <div class="icons">
+        <span>🎁</span>
+        <span>💎</span>
+        <span>⭐</span>
+      </div>
+      <div class="balance-val">
+        <div class="ton-icon">T</div>
+        <span id="balanceDisplay">0.00</span>
+      </div>
+      <span style="font-size:22px;cursor:pointer">➕</span>
+    </div>
+
+    <div class="bet-buttons">
+      <button class="bet-btn" onclick="placeBet(0.1)">
+        <div class="ton-small">T</div>0.1
+      </button>
+      <button class="bet-btn" onclick="placeBet(0.5)">
+        <div class="ton-small">T</div>0.5
+      </button>
+      <button class="bet-btn" onclick="placeBet(1)">
+        <div class="ton-small">T</div>1
+      </button>
+      <button class="bet-btn allin" onclick="placeBet('allin')">
+        All In
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Winner popup -->
+<div class="popup-overlay" id="winnerPopup">
+  <div class="popup">
+    <div class="popup-game-id">
+      <span>Ролл #<span id="popupGameId">0</span></span>
+      <button onclick="closePopup()">✕</button>
+    </div>
+    <div class="winner-avatar" id="winnerAvatar">🏆</div>
+    <div class="winner-label">Победитель</div>
+    <div class="winner-name" id="winnerName">@player</div>
+    <div class="prize-box">
+      <div class="prize-ton">
+        <div class="prize-icon">T</div>
+        <div class="prize-val"><span id="prizeVal">0</span> TON</div>
+      </div>
+      <div class="prize-sub">x<span id="multiplierVal">1.0</span></div>
+    </div>
+    <div class="popup-stats">
+      <div class="stat-chip">Шанс<strong><span id="chanceVal">0</span>%</strong></div>
+      <div class="stat-chip">Банк<strong><span id="potVal">0</span> TON</strong></div>
+    </div>
+    <button class="popup-done" onclick="closePopup()">Готово</button>
+  </div>
+</div>
+
+<!-- Tab bar -->
+<div class="tabbar">
+  <div class="tab" onclick="setTab('lobby')"><div class="icon">🏛</div>ПвП Лобби</div>
+  <div class="tab active" onclick="setTab('pvp')"><div class="icon">🎡</div>Соло</div>
+  <div class="tab" onclick="setTab('raffle')"><div class="icon">🎁</div>Розыгрыши</div>
+  <div class="tab" onclick="setTab('shop')"><div class="icon">🛒</div>Магазин</div>
+  <div class="tab" onclick="setTab('profile')"><div class="icon">👤</div>Профиль</div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────
+let gameState = {
+  gameId: 1,
+  status: 'betting',  // betting | spinning | ended
+  timer: 20,
+  pot: 0,
+  bets: [],          // [{userId, username, amount, color}]
+  myBet: 0,
+  balance: 100.0,
+  spinning: false,
+  spinAngle: 0,
+  targetAngle: 0,
+  lastGame: null,
+  topGame: null,
+};
+
+const COLORS = [
+  '#39FF14','#FF3131','#3D5AFE','#FF6D00',
+  '#D500F9','#00E5FF','#FFEA00','#FF1744'
+];
+
+// ── Telegram Init ──────────────────────────────────────
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  const user = tg.initDataUnsafe?.user;
+  if (user) {
+    gameState.username = user.username || user.first_name;
+  }
+}
+
+// ── Canvas ─────────────────────────────────────────────
+const canvas = document.getElementById('wheelCanvas');
+const ctx = canvas.getContext('2d');
+const CX = canvas.width / 2, CY = canvas.height / 2, R = 130;
+
+function drawWheel(rotationOffset = 0) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const bets = gameState.bets;
+  if (!bets.length) {
+    // Empty wheel placeholder
+    ctx.beginPath();
+    ctx.arc(CX, CY, R, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a2040';
+    ctx.fill();
+    ctx.strokeStyle = '#1e2540';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Center
+    ctx.beginPath();
+    ctx.arc(CX, CY, 44, 0, Math.PI * 2);
+    ctx.fillStyle = '#0a0c14';
+    ctx.fill();
+    return;
+  }
+
+  const total = bets.reduce((s, b) => s + b.amount, 0);
+  let startAngle = rotationOffset - Math.PI / 2;
+
+  bets.forEach((b, i) => {
+    const slice = (b.amount / total) * Math.PI * 2;
+    const endAngle = startAngle + slice;
+
+    // Sector
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.arc(CX, CY, R, startAngle, endAngle);
+    ctx.closePath();
+    ctx.fillStyle = b.color;
+    ctx.fill();
+
+    // Neon glow border
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.arc(CX, CY, R, startAngle, endAngle);
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Avatar (letter circle) in sector
+    if (slice > 0.25) {
+      const midAngle = startAngle + slice / 2;
+      const avatarDist = R * 0.65;
+      const ax = CX + Math.cos(midAngle) * avatarDist;
+      const ay = CY + Math.sin(midAngle) * avatarDist;
+      const r2 = Math.min(22, R * slice * 0.35);
+
+      ctx.beginPath();
+      ctx.arc(ax, ay, r2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fill();
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(10, r2 * 0.7)}px Rajdhani`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText((b.username || '?')[0].toUpperCase(), ax, ay);
+    }
+
+    startAngle = endAngle;
+  });
+
+  // Center circle
+  ctx.beginPath();
+  ctx.arc(CX, CY, 44, 0, Math.PI * 2);
+  ctx.fillStyle = '#0a0c14';
+  ctx.fill();
+  ctx.strokeStyle = '#1e2540';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+// ── Timer ──────────────────────────────────────────────
+let timerInterval = null;
+
+function startTimer() {
+  clearInterval(timerInterval);
+  gameState.timer = 20;
+  document.getElementById('timerDisplay').textContent = '20';
+
+  timerInterval = setInterval(() => {
+    gameState.timer--;
+    const d = document.getElementById('timerDisplay');
+    d.textContent = gameState.timer <= 9 ? '0' + gameState.timer : gameState.timer;
+    if (gameState.timer <= 5) d.style.color = '#FF3131';
+    else d.style.color = '#e8eaf6';
+
+    if (gameState.timer <= 0) {
+      clearInterval(timerInterval);
+      triggerSpin();
+    }
+  }, 1000);
+}
+
+// ── Spin ───────────────────────────────────────────────
+function triggerSpin() {
+  if (gameState.spinning || gameState.bets.length === 0) {
+    resetGame();
+    return;
+  }
+  gameState.spinning = true;
+  gameState.status = 'spinning';
+  document.getElementById('timerDisplay').textContent = '🎡';
+
+  // Pick winner weighted random (client-side demo)
+  const total = gameState.bets.reduce((s, b) => s + b.amount, 0);
+  let r = Math.random() * total, cum = 0, winner = gameState.bets[0];
+  for (const b of gameState.bets) {
+    cum += b.amount;
+    if (r <= cum) { winner = b; break; }
+  }
+
+  // Calculate target angle so winner's sector aligns with top arrow
+  const winnerIdx = gameState.bets.indexOf(winner);
+  let targetOffset = 0;
+  for (let i = 0; i < winnerIdx; i++) {
+    targetOffset += (gameState.bets[i].amount / total) * Math.PI * 2;
+  }
+  const winnerSlice = (winner.amount / total) * Math.PI * 2;
+  const targetMid = targetOffset + winnerSlice / 2;
+
+  // Spin: multiple full rotations + land on winner
+  const fullSpins = (5 + Math.floor(Math.random() * 3)) * Math.PI * 2;
+  const finalAngle = fullSpins - targetMid;
+
+  animateSpin(0, finalAngle, 4000, winner);
+}
+
+function animateSpin(current, target, duration, winner) {
+  const start = performance.now();
+  function step(now) {
+    const elapsed = now - start;
+    const progress = Math.min(elapsed / duration, 1);
+    // Ease out cubic
+    const eased = 1 - Math.pow(1 - progress, 4);
+    const angle = current + (target - current) * eased;
+    drawWheel(angle);
+
+    if (progress < 1) {
+      requestAnimationFrame(step);
+    } else {
+      drawWheel(target);
+      setTimeout(() => showWinner(winner), 300);
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+function showWinner(winner) {
+  const total = gameState.bets.reduce((s, b) => s + b.amount, 0);
+  const prize = winner.amount + (total - winner.amount) * 0.9;
+  const multiplier = (prize / winner.amount).toFixed(2);
+  const chance = ((winner.amount / total) * 100).toFixed(1);
+
+  document.getElementById('popupGameId').textContent = gameState.gameId;
+  document.getElementById('winnerName').textContent = '@' + (winner.username || 'player');
+  document.getElementById('prizeVal').textContent = prize.toFixed(2);
+  document.getElementById('multiplierVal').textContent = multiplier;
+  document.getElementById('chanceVal').textContent = chance;
+  document.getElementById('potVal').textContent = total.toFixed(2);
+  document.getElementById('winnerAvatar').textContent = (winner.username || '?')[0].toUpperCase();
+  document.getElementById('winnerAvatar').style.borderColor = winner.color;
+
+  // Update balance if I won
+  if (winner.username === gameState.username) {
+    gameState.balance += prize - gameState.myBet;
+  }
+
+  // Save history
+  gameState.lastGame = { pot: total, winner: winner.username };
+
+  document.getElementById('winnerPopup').classList.add('show');
+  document.getElementById('lastGame').textContent = total.toFixed(2) + ' TON';
+}
+
+function closePopup() {
+  document.getElementById('winnerPopup').classList.remove('show');
+  setTimeout(resetGame, 400);
+}
+
+function resetGame() {
+  gameState.gameId++;
+  gameState.bets = [];
+  gameState.pot = 0;
+  gameState.myBet = 0;
+  gameState.spinning = false;
+  gameState.status = 'betting';
+  updateUI();
+  drawWheel();
+  startTimer();
+}
+
+// ── Betting ────────────────────────────────────────────
+function placeBet(amount) {
+  if (gameState.status !== 'betting') {
+    alert('Ставки закрыты!');
+    return;
+  }
+
+  const bal = gameState.balance;
+  const actual = amount === 'allin' ? bal : parseFloat(amount);
+
+  if (actual <= 0 || actual > bal) {
+    alert('Недостаточно средств!');
+    return;
+  }
+
+  gameState.balance -= actual;
+  gameState.myBet += actual;
+
+  // Add or update my bet
+  const existing = gameState.bets.find(b => b.username === gameState.username);
+  if (existing) {
+    existing.amount += actual;
+  } else {
+    const color = COLORS[gameState.bets.length % COLORS.length];
+    gameState.bets.push({
+      userId: tg?.initDataUnsafe?.user?.id || 0,
+      username: gameState.username || 'Ты',
+      amount: actual,
+      color: color,
+      isMe: true,
+    });
+  }
+
+  gameState.pot += actual;
+  updateUI();
+  drawWheel(0);
+
+  // Simulate other players joining
+  if (gameState.bets.length < 2 && Math.random() > 0.3) {
+    setTimeout(addBotPlayer, 1500 + Math.random() * 2000);
+  }
+}
+
+function addBotPlayer() {
+  if (gameState.status !== 'betting' || gameState.bets.length >= 6) return;
+  const bots = ['audioparty','lqp_best','CryptoKing','TONwhale','NeonRoller'];
+  const name = bots[Math.floor(Math.random() * bots.length)];
+  const amounts = [0.1, 0.5, 1, 2, 5];
+  const amount = amounts[Math.floor(Math.random() * amounts.length)];
+  const color = COLORS[gameState.bets.length % COLORS.length];
+
+  gameState.bets.push({ userId: Math.random(), username: name, amount, color, isMe: false });
+  gameState.pot += amount;
+  updateUI();
+  drawWheel(0);
+
+  if (Math.random() > 0.5) setTimeout(addBotPlayer, 2000 + Math.random() * 3000);
+}
+
+// ── UI Sync ────────────────────────────────────────────
+function updateUI() {
+  document.getElementById('balanceDisplay').textContent = gameState.balance.toFixed(2);
+  document.getElementById('totalPot').textContent = gameState.pot.toFixed(1);
+
+  if (gameState.lastGame) {
+    document.getElementById('lastGame').textContent = gameState.lastGame.pot.toFixed(2) + ' TON';
+  }
+  if (gameState.topGame) {
+    document.getElementById('topGame').textContent = gameState.topGame.pot.toFixed(2) + ' TON';
+  }
+}
+
+function setTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  // Tab routing would be expanded for full multi-page app
+}
+
+// ── Init ───────────────────────────────────────────────
+drawWheel();
+startTimer();
+updateUI();
+
+// Kick off a bot after a short delay for demo feel
+setTimeout(() => addBotPlayer(), 3000);
+</script>
+</body>
+</html>
