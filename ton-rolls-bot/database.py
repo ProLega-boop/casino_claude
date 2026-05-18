@@ -1,4 +1,4 @@
-"""database.py — SQLite persistence layer for TON Rolls."""
+"""database.py — SQLite persistence for TON Rolls / RoyalDuel."""
 from __future__ import annotations
 
 import json
@@ -20,15 +20,17 @@ def init_db() -> None:
     with _conn() as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id      INTEGER PRIMARY KEY,
-            username     TEXT    DEFAULT '',
-            first_name   TEXT    DEFAULT '',
-            balance      REAL    DEFAULT 100.0,
-            referrer_id  INTEGER,
-            used_promos  TEXT    DEFAULT '[]',
-            games_played INTEGER DEFAULT 0,
-            games_won    INTEGER DEFAULT 0,
-            created_at   TEXT    DEFAULT (datetime('now'))
+            user_id          INTEGER PRIMARY KEY,
+            username         TEXT    DEFAULT '',
+            first_name       TEXT    DEFAULT '',
+            balance          REAL    DEFAULT 100.0,
+            ref_balance      REAL    DEFAULT 0.0,
+            referrer_id      INTEGER,
+            used_promos      TEXT    DEFAULT '[]',
+            games_played     INTEGER DEFAULT 0,
+            games_won        INTEGER DEFAULT 0,
+            total_ref_earned REAL    DEFAULT 0.0,
+            created_at       TEXT    DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS games (
@@ -43,7 +45,7 @@ def init_db() -> None:
             ended_at   TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS history (
+        CREATE TABLE IF NOT EXISTS pvp_history (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id      INTEGER,
             winner_id    INTEGER,
@@ -56,6 +58,36 @@ def init_db() -> None:
             seed_hash    TEXT,
             bets_json    TEXT,
             created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS lobby_rooms (
+            room_id      TEXT PRIMARY KEY,
+            creator_id   INTEGER,
+            game_type    TEXT,
+            bet_amount   REAL,
+            max_players  INTEGER,
+            is_private   INTEGER DEFAULT 0,
+            private_key  TEXT DEFAULT '',
+            status       TEXT DEFAULT 'waiting',
+            players      TEXT DEFAULT '[]',
+            seed         TEXT DEFAULT '',
+            seed_hash    TEXT DEFAULT '',
+            result       TEXT DEFAULT '{}',
+            created_at   TEXT DEFAULT (datetime('now')),
+            ended_at     TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS lobby_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id     TEXT,
+            game_type   TEXT,
+            winner_id   INTEGER,
+            winner_name TEXT,
+            pot         REAL,
+            players     TEXT,
+            seed        TEXT,
+            seed_hash   TEXT,
+            created_at  TEXT DEFAULT (datetime('now'))
         );
         """)
 
@@ -85,7 +117,31 @@ def upsert_user(user_id: int, username: str, first_name: str,
 def update_balance(user_id: int, delta: float) -> None:
     with _conn() as db:
         db.execute("UPDATE users SET balance = balance + ? WHERE user_id=?",
-                   (delta, user_id))
+                   (round(delta, 6), user_id))
+
+
+def add_ref_balance(user_id: int, amount: float) -> None:
+    """Add to referral pending balance (not main balance)."""
+    with _conn() as db:
+        db.execute(
+            "UPDATE users SET ref_balance = ref_balance + ?, "
+            "total_ref_earned = total_ref_earned + ? WHERE user_id=?",
+            (round(amount, 6), round(amount, 6), user_id),
+        )
+
+
+def claim_ref_balance(user_id: int) -> float:
+    """Move referral balance → main balance. Returns amount claimed."""
+    u = get_user(user_id)
+    if not u or u["ref_balance"] < 0.001:
+        return 0.0
+    amount = round(u["ref_balance"], 6)
+    with _conn() as db:
+        db.execute(
+            "UPDATE users SET balance = balance + ?, ref_balance = 0 WHERE user_id=?",
+            (amount, user_id),
+        )
+    return amount
 
 
 def increment_stats(user_id: int, won: bool) -> None:
@@ -102,7 +158,8 @@ def mark_promo(user_id: int, code: str) -> None:
     if not u:
         return
     used = json.loads(u["used_promos"])
-    used.append(code)
+    if code not in used:
+        used.append(code)
     with _conn() as db:
         db.execute("UPDATE users SET used_promos=? WHERE user_id=?",
                    (json.dumps(used), user_id))
@@ -121,15 +178,17 @@ def get_referrer_id(user_id: int) -> int | None:
 def get_referrals(referrer_id: int) -> list[dict]:
     with _conn() as db:
         rows = db.execute(
-            "SELECT user_id, username, first_name FROM users WHERE referrer_id=?",
+            "SELECT u.user_id, u.username, u.first_name, "
+            "COALESCE(u.total_ref_earned, 0) as earned "
+            "FROM users u WHERE u.referrer_id=?",
             (referrer_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-# ── Active game ────────────────────────────────────────────────────────────
+# ── PvP Wheel ──────────────────────────────────────────────────────────────
 
-def get_active_game() -> dict | None:
+def get_active_pvp_game() -> dict | None:
     with _conn() as db:
         row = db.execute(
             "SELECT * FROM games WHERE status IN ('waiting','betting') "
@@ -142,16 +201,16 @@ def get_active_game() -> dict | None:
     return d
 
 
-def create_game(seed: str, seed_hash: str) -> int:
+def create_pvp_game(seed: str, seed_hash: str) -> int:
     with _conn() as db:
         cur = db.execute(
-            "INSERT INTO games (status, bets, seed, seed_hash) VALUES ('waiting','{}',?,?)",
+            "INSERT INTO games (status,bets,seed,seed_hash) VALUES ('waiting','{}',?,?)",
             (seed, seed_hash),
         )
         return cur.lastrowid
 
 
-def get_game(game_id: int) -> dict | None:
+def get_pvp_game(game_id: int) -> dict | None:
     with _conn() as db:
         row = db.execute("SELECT * FROM games WHERE game_id=?", (game_id,)).fetchone()
     if not row:
@@ -161,58 +220,42 @@ def get_game(game_id: int) -> dict | None:
     return d
 
 
-def add_bet_to_game(game_id: int, user_id: int, amount: float,
-                    username: str, first_name: str) -> None:
+def add_pvp_bet(game_id: int, user_id: int, amount: float,
+                username: str, first_name: str) -> None:
     with _conn() as db:
-        row = db.execute(
-            "SELECT bets, total_pot FROM games WHERE game_id=?", (game_id,)
-        ).fetchone()
-        bets: dict = json.loads(row["bets"])
-        uid = str(user_id)
+        row = db.execute("SELECT bets,total_pot FROM games WHERE game_id=?",
+                         (game_id,)).fetchone()
+        bets = json.loads(row["bets"])
+        uid  = str(user_id)
         if uid in bets:
             bets[uid]["amount"] = round(bets[uid]["amount"] + amount, 6)
         else:
-            bets[uid] = {
-                "amount":     amount,
-                "username":   username or "",
-                "first_name": first_name or "",
-            }
+            bets[uid] = {"amount": amount, "username": username or "",
+                         "first_name": first_name or ""}
         db.execute(
-            "UPDATE games SET bets=?, total_pot=total_pot+? WHERE game_id=?",
+            "UPDATE games SET bets=?,total_pot=total_pot+? WHERE game_id=?",
             (json.dumps(bets), amount, game_id),
         )
 
 
-def set_game_status(game_id: int, status: str,
-                    winner_id: int | None = None) -> None:
+def set_pvp_status(game_id: int, status: str, winner_id: int | None = None) -> None:
     now = datetime.utcnow().isoformat()
     with _conn() as db:
         if status == "betting":
-            db.execute(
-                "UPDATE games SET status=?, started_at=? WHERE game_id=?",
-                (status, now, game_id),
-            )
+            db.execute("UPDATE games SET status=?,started_at=? WHERE game_id=?",
+                       (status, now, game_id))
         elif status == "ended":
-            db.execute(
-                "UPDATE games SET status=?, winner_id=?, ended_at=? WHERE game_id=?",
-                (status, winner_id, now, game_id),
-            )
+            db.execute("UPDATE games SET status=?,winner_id=?,ended_at=? WHERE game_id=?",
+                       (status, winner_id, now, game_id))
         else:
-            db.execute(
-                "UPDATE games SET status=? WHERE game_id=?", (status, game_id)
-            )
+            db.execute("UPDATE games SET status=? WHERE game_id=?", (status, game_id))
 
 
-# ── History ────────────────────────────────────────────────────────────────
-
-def save_history(
-    game_id: int, winner_id: int, winner_name: str,
-    pot: float, winner_bet: float, multiplier: float, chance: float,
-    seed: str, seed_hash: str, bets: dict,
-) -> None:
+def save_pvp_history(game_id, winner_id, winner_name, pot, winner_bet,
+                     multiplier, chance, seed, seed_hash, bets) -> None:
     with _conn() as db:
         db.execute(
-            """INSERT INTO history
+            """INSERT INTO pvp_history
                (game_id,winner_id,winner_name,pot,winner_bet,
                 multiplier,chance,seed,seed_hash,bets_json)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -221,54 +264,148 @@ def save_history(
         )
 
 
-def get_history_all(limit: int = 50) -> list[dict]:
+def get_pvp_history_all(limit=50) -> list[dict]:
     with _conn() as db:
         rows = db.execute(
-            "SELECT * FROM history ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM pvp_history ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["bets"] = json.loads(d["bets_json"])
-        result.append(d)
-    return result
+    return [_ph(r) for r in rows]
 
 
-def get_history_lucky(limit: int = 20) -> list[dict]:
-    """Top 20 lowest-chance wins."""
+def get_pvp_history_lucky(limit=20) -> list[dict]:
     with _conn() as db:
         rows = db.execute(
-            "SELECT * FROM history ORDER BY chance ASC LIMIT ?", (limit,)
+            "SELECT * FROM pvp_history ORDER BY chance ASC LIMIT ?", (limit,)
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["bets"] = json.loads(d["bets_json"])
-        result.append(d)
-    return result
+    return [_ph(r) for r in rows]
 
 
-def get_history_big(limit: int = 20) -> list[dict]:
-    """Top 20 biggest pots."""
+def get_pvp_history_big(limit=20) -> list[dict]:
     with _conn() as db:
         rows = db.execute(
-            "SELECT * FROM history ORDER BY pot DESC LIMIT ?", (limit,)
+            "SELECT * FROM pvp_history ORDER BY pot DESC LIMIT ?", (limit,)
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["bets"] = json.loads(d["bets_json"])
-        result.append(d)
-    return result
+    return [_ph(r) for r in rows]
 
 
-def get_history_entry(game_id: int) -> dict | None:
+def get_pvp_history_entry(game_id: int) -> dict | None:
     with _conn() as db:
         row = db.execute(
-            "SELECT * FROM history WHERE game_id=?", (game_id,)
+            "SELECT * FROM pvp_history WHERE game_id=?", (game_id,)
+        ).fetchone()
+    return _ph(row) if row else None
+
+
+def _ph(row) -> dict:
+    d = dict(row)
+    d["bets"] = json.loads(d["bets_json"])
+    return d
+
+
+# ── Lobby Rooms ────────────────────────────────────────────────────────────
+
+def create_room(room_id: str, creator_id: int, game_type: str,
+                bet_amount: float, max_players: int,
+                is_private: bool, private_key: str,
+                seed: str, seed_hash: str) -> None:
+    with _conn() as db:
+        db.execute(
+            """INSERT INTO lobby_rooms
+               (room_id,creator_id,game_type,bet_amount,max_players,
+                is_private,private_key,seed,seed_hash,players)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (room_id, creator_id, game_type, bet_amount, max_players,
+             1 if is_private else 0, private_key, seed, seed_hash, "[]"),
+        )
+
+
+def get_room(room_id: str) -> dict | None:
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM lobby_rooms WHERE room_id=?", (room_id,)
         ).fetchone()
     if not row:
         return None
     d = dict(row)
-    d["bets"] = json.loads(d["bets_json"])
+    d["players"]    = json.loads(d["players"])
+    d["result"]     = json.loads(d["result"])
+    return d
+
+
+def get_public_rooms() -> list[dict]:
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM lobby_rooms WHERE is_private=0 AND status='waiting' "
+            "ORDER BY created_at DESC LIMIT 30"
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["players"] = json.loads(d["players"])
+        d["result"]  = json.loads(d["result"])
+        result.append(d)
+    return result
+
+
+def room_add_player(room_id: str, user_id: int, username: str,
+                    first_name: str) -> None:
+    with _conn() as db:
+        row = db.execute("SELECT players FROM lobby_rooms WHERE room_id=?",
+                         (room_id,)).fetchone()
+        players = json.loads(row["players"])
+        if not any(p["user_id"] == user_id for p in players):
+            players.append({"user_id": user_id,
+                            "username": username or "",
+                            "first_name": first_name or ""})
+        db.execute("UPDATE lobby_rooms SET players=? WHERE room_id=?",
+                   (json.dumps(players), room_id))
+
+
+def set_room_status(room_id: str, status: str, result: dict | None = None) -> None:
+    now = datetime.utcnow().isoformat()
+    with _conn() as db:
+        if status == "ended":
+            db.execute(
+                "UPDATE lobby_rooms SET status=?,result=?,ended_at=? WHERE room_id=?",
+                (status, json.dumps(result or {}), now, room_id),
+            )
+        else:
+            db.execute("UPDATE lobby_rooms SET status=? WHERE room_id=?",
+                       (status, room_id))
+
+
+def save_lobby_history(room_id, game_type, winner_id, winner_name,
+                       pot, players, seed, seed_hash) -> None:
+    with _conn() as db:
+        db.execute(
+            """INSERT INTO lobby_history
+               (room_id,game_type,winner_id,winner_name,pot,players,seed,seed_hash)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (room_id, game_type, winner_id, winner_name, pot,
+             json.dumps(players), seed, seed_hash),
+        )
+
+
+def get_lobby_history(limit=50) -> list[dict]:
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM lobby_history ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["players"] = json.loads(d["players"])
+        result.append(d)
+    return result
+
+
+def get_lobby_history_entry(room_id: str) -> dict | None:
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM lobby_history WHERE room_id=?", (room_id,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["players"] = json.loads(d["players"])
     return d
