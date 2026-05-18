@@ -1,57 +1,81 @@
-"""server.py — FastAPI + WebSocket real-time game server for TON Rolls."""
+"""server.py — FastAPI + WebSocket server for RoyalDuel / TON Rolls."""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import random
+import string
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
 import database as db
 import game_logic as gl
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("rolls")
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("royalduel")
 
-app = FastAPI(title="TON Rolls Server")
+app = FastAPI(title="RoyalDuel Server")
 
-# ── Serve webapp ───────────────────────────────────────────────────────────
 WEBAPP_DIR = Path("webapp")
 app.mount("/static", StaticFiles(directory=str(WEBAPP_DIR)), name="static")
 
 
 @app.get("/webapp", response_class=HTMLResponse)
+@app.get("/webapp/index.html", response_class=HTMLResponse)
 async def serve_webapp():
     return (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
 
 
-@app.get("/webapp/index.html", response_class=HTMLResponse)
-async def serve_webapp_html():
-    return (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
-
-
-# ── Connection manager ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# Connection manager
+# ══════════════════════════════════════════════════════════════════════════
 
 class ConnManager:
     def __init__(self):
-        self.active: list[WebSocket] = []
+        self.clients: list[WebSocket] = []
+        # room_id → set of WebSockets
+        self.room_subs: dict[str, set[WebSocket]] = {}
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self.active.append(ws)
+        self.clients.append(ws)
 
     def disconnect(self, ws: WebSocket):
-        self.active.remove(ws) if ws in self.active else None
+        if ws in self.clients:
+            self.clients.remove(ws)
+        for subs in self.room_subs.values():
+            subs.discard(ws)
+
+    def subscribe_room(self, ws: WebSocket, room_id: str):
+        self.room_subs.setdefault(room_id, set()).add(ws)
+
+    def unsubscribe_room(self, ws: WebSocket, room_id: str):
+        if room_id in self.room_subs:
+            self.room_subs[room_id].discard(ws)
 
     async def broadcast(self, data: dict):
-        msg = json.dumps(data)
+        msg  = json.dumps(data)
         dead = []
-        for ws in self.active:
+        for ws in list(self.clients):
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+    async def broadcast_room(self, room_id: str, data: dict):
+        msg  = json.dumps(data)
+        subs = self.room_subs.get(room_id, set())
+        dead = []
+        for ws in list(subs):
             try:
                 await ws.send_text(msg)
             except Exception:
@@ -68,97 +92,80 @@ class ConnManager:
 
 mgr = ConnManager()
 
-# ── Game state ─────────────────────────────────────────────────────────────
 
-class GameState:
+# ══════════════════════════════════════════════════════════════════════════
+# PvP Wheel game state
+# ══════════════════════════════════════════════════════════════════════════
+
+class PvPGame:
     def __init__(self):
         self.game_id: int | None = None
-        self.status: str = "waiting"   # waiting | betting | spinning | ended
-        self.timer: int  = config.ROUND_DURATION
-        self.bets: dict  = {}
-        self.pot: float  = 0.0
-        self.seed: str   = ""
-        self.seed_hash: str = ""
-        self._timer_task: asyncio.Task | None = None
+        self.status:  str        = "waiting"
+        self.timer:   int        = config.ROUND_DURATION
+        self.bets:    dict       = {}
+        self.pot:     float      = 0.0
+        self.seed:    str        = ""
+        self.seed_hash: str      = ""
+        self._task:   asyncio.Task | None = None
 
     def snapshot(self) -> dict:
-        return {
-            "type":      "state",
-            "game_id":   self.game_id,
-            "status":    self.status,
-            "timer":     self.timer,
-            "bets":      self.bets,
-            "pot":       self.pot,
-            "seed_hash": self.seed_hash,
-        }
+        return {"type": "pvp_state", "game_id": self.game_id,
+                "status": self.status, "timer": self.timer,
+                "bets": self.bets, "pot": self.pot,
+                "seed_hash": self.seed_hash}
 
     async def ensure_game(self):
-        """Create a new game if none is active."""
         if self.game_id is not None and self.status in ("waiting", "betting"):
             return
-        self.seed      = gl.generate_seed()
-        self.seed_hash = gl.seed_to_hash(self.seed)
-        self.bets      = {}
-        self.pot       = 0.0
-        self.status    = "waiting"
-        self.timer     = config.ROUND_DURATION
-        self.game_id   = db.create_game(self.seed, self.seed_hash)
-        log.info(f"New game #{self.game_id} hash={self.seed_hash[:12]}…")
+        self.seed       = gl.generate_seed()
+        self.seed_hash  = gl.seed_to_hash(self.seed)
+        self.bets       = {}
+        self.pot        = 0.0
+        self.status     = "waiting"
+        self.timer      = config.ROUND_DURATION
+        self.game_id    = db.create_pvp_game(self.seed, self.seed_hash)
+        log.info(f"PvP game #{self.game_id} created")
         await mgr.broadcast(self.snapshot())
 
     async def place_bet(self, user_id: int, amount: float,
                         username: str, first_name: str) -> dict:
         if self.status == "spinning":
-            return {"ok": False, "error": "Ставки закрыты — колесо крутится"}
-
+            return {"ok": False, "error": "Ставки закрыты"}
         user = db.get_user(user_id)
         if not user:
             return {"ok": False, "error": "Пользователь не найден"}
-        if user["balance"] < amount:
+        if user["balance"] < amount or amount <= 0:
             return {"ok": False, "error": "Недостаточно средств"}
-        if amount <= 0:
-            return {"ok": False, "error": "Некорректная сумма"}
 
-        # Deduct balance
         db.update_balance(user_id, -amount)
-
-        # Merge into game bets
         uid = str(user_id)
         if uid in self.bets:
             self.bets[uid]["amount"] = round(self.bets[uid]["amount"] + amount, 6)
         else:
-            self.bets[uid] = {
-                "amount":     amount,
-                "username":   username or "",
-                "first_name": first_name or "",
-            }
+            self.bets[uid] = {"amount": amount, "username": username or "",
+                               "first_name": first_name or ""}
         self.pot = round(self.pot + amount, 6)
+        db.add_pvp_bet(self.game_id, user_id, amount, username, first_name)
 
-        db.add_bet_to_game(self.game_id, user_id, amount, username, first_name)
-
-        new_balance = db.get_user(user_id)["balance"]
-
-        # Start timer when 2+ distinct players
         if self.status == "waiting" and len(self.bets) >= 2:
             self.status = "betting"
-            db.set_game_status(self.game_id, "betting")
+            db.set_pvp_status(self.game_id, "betting")
             self._start_timer()
 
-        await mgr.broadcast({**self.snapshot(), "type": "bet_placed",
-                              "uid": uid, "amount": amount})
-        return {"ok": True, "balance": new_balance}
+        new_bal = db.get_user(user_id)["balance"]
+        await mgr.broadcast({**self.snapshot(), "type": "pvp_bet_placed"})
+        return {"ok": True, "balance": new_bal}
 
     def _start_timer(self):
-        if self._timer_task:
-            self._timer_task.cancel()
-        self._timer_task = asyncio.create_task(self._countdown())
-        log.info(f"Timer started for game #{self.game_id}")
+        if self._task:
+            self._task.cancel()
+        self._task = asyncio.create_task(self._countdown())
 
     async def _countdown(self):
         while self.timer > 0:
             await asyncio.sleep(1)
             self.timer -= 1
-            await mgr.broadcast({"type": "tick", "timer": self.timer,
+            await mgr.broadcast({"type": "pvp_tick", "timer": self.timer,
                                   "game_id": self.game_id})
         await self._spin()
 
@@ -170,96 +177,272 @@ class GameState:
             return
 
         self.status = "spinning"
-        db.set_game_status(self.game_id, "spinning")
-        await mgr.broadcast({"type": "spinning", "game_id": self.game_id})
-
+        db.set_pvp_status(self.game_id, "spinning")
+        await mgr.broadcast({"type": "pvp_spinning", "game_id": self.game_id})
         await asyncio.sleep(config.FREEZE_DURATION)
 
-        # Pick winner
-        winner_uid, ticket, total_tickets = gl.pick_winner(self.bets, self.seed)
-        winner_data  = self.bets[winner_uid]
-        winner_bet   = winner_data["amount"]
-        winner_id    = int(winner_uid)
-        prize, mult, comm = gl.calc_prize(winner_bet, self.pot, config.COMMISSION)
-        chance       = round((winner_bet / self.pot) * 100, 2)
+        winner_uid, ticket, total = gl.pick_wheel_winner(self.bets, self.seed)
+        winner_data = self.bets[winner_uid]
+        winner_id   = int(winner_uid)
+        prize, mult, comm = gl.calc_wheel_prize(
+            winner_data["amount"], self.pot, config.COMMISSION_PVP)
+        chance = round((winner_data["amount"] / self.pot) * 100, 2)
 
-        # Update DB
         db.update_balance(winner_id, prize)
-        db.set_game_status(self.game_id, "ended", winner_id=winner_id)
-        db.increment_stats(winner_id, won=True)
+        db.set_pvp_status(self.game_id, "ended", winner_id=winner_id)
         for uid in self.bets:
-            if int(uid) != winner_id:
-                db.increment_stats(int(uid), won=False)
+            db.increment_stats(int(uid), won=(uid == winner_uid))
 
-        # Referral payout
         ref_id = db.get_referrer_id(winner_id)
         if ref_id:
-            ref_bonus = round(comm * config.REFERRAL_SHARE, 6)
-            db.update_balance(ref_id, ref_bonus)
+            db.add_ref_balance(ref_id, round(comm * config.REFERRAL_SHARE, 6))
 
-        # Save history
-        db.save_history(
-            game_id     = self.game_id,
-            winner_id   = winner_id,
-            winner_name = winner_data.get("username") or winner_data.get("first_name", ""),
-            pot         = self.pot,
-            winner_bet  = winner_bet,
-            multiplier  = mult,
-            chance      = chance,
-            seed        = self.seed,
-            seed_hash   = self.seed_hash,
-            bets        = self.bets,
-        )
+        db.save_pvp_history(
+            game_id=self.game_id, winner_id=winner_id,
+            winner_name=winner_data.get("username") or winner_data.get("first_name", ""),
+            pot=self.pot, winner_bet=winner_data["amount"],
+            multiplier=mult, chance=chance,
+            seed=self.seed, seed_hash=self.seed_hash, bets=self.bets)
 
-        result = {
-            "type":          "result",
-            "game_id":       self.game_id,
-            "winner_uid":    winner_uid,
-            "winner_name":   winner_data.get("username") or winner_data.get("first_name", ""),
-            "winner_bet":    winner_bet,
-            "prize":         prize,
-            "multiplier":    mult,
-            "chance":        chance,
-            "pot":           self.pot,
-            "ticket":        ticket,
-            "total_tickets": total_tickets,
-            "seed":          self.seed,
-            "seed_hash":     self.seed_hash,
-            "bets":          self.bets,
-        }
+        result = {"type": "pvp_result", "game_id": self.game_id,
+                  "winner_uid": winner_uid,
+                  "winner_name": winner_data.get("username") or winner_data.get("first_name", ""),
+                  "winner_bet": winner_data["amount"], "prize": prize,
+                  "multiplier": mult, "chance": chance, "pot": self.pot,
+                  "ticket": ticket, "total_tickets": total,
+                  "seed": self.seed, "seed_hash": self.seed_hash, "bets": self.bets}
         await mgr.broadcast(result)
-        log.info(f"Game #{self.game_id} finished. Winner uid={winner_uid} prize={prize}")
 
         self.status  = "ended"
         self.game_id = None
-
-        # Start next game after short delay
         await asyncio.sleep(3)
         await self.ensure_game()
 
 
-game = GameState()
+pvp_game = PvPGame()
 
 
-# ── WebSocket endpoint ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# Lobby room manager
+# ══════════════════════════════════════════════════════════════════════════
+
+class LobbyManager:
+    """In-memory room state (backed by DB)."""
+
+    def _room_key(self, n=8) -> str:
+        return "".join(random.choices(string.ascii_uppercase + string.digits, k=n))
+
+    def _priv_key(self, n=6) -> str:
+        return "".join(random.choices(string.digits, k=n))
+
+    async def create_room(self, ws: WebSocket, msg: dict) -> dict:
+        user_id    = int(msg["user_id"])
+        game_type  = msg["game_type"]   # wheel | dice | coin
+        bet_amount = float(msg["bet_amount"])
+        max_players= int(msg.get("max_players", 2))
+        is_private = bool(msg.get("is_private", False))
+        username   = msg.get("username", "")
+        first_name = msg.get("first_name", "")
+
+        user = db.get_user(user_id)
+        if not user or user["balance"] < bet_amount:
+            return {"ok": False, "error": "Недостаточно средств"}
+
+        # Validate limits
+        if game_type == "coin"  and max_players != 2:
+            max_players = 2
+        if game_type == "dice"  and max_players > 4:
+            max_players = 4
+        if game_type == "wheel" and max_players > 10:
+            max_players = 10
+        if max_players < 2:
+            max_players = 2
+
+        room_id = self._room_key()
+        priv    = self._priv_key() if is_private else ""
+        seed    = gl.generate_seed()
+        s_hash  = gl.seed_to_hash(seed)
+
+        db.update_balance(user_id, -bet_amount)
+        db.create_room(room_id, user_id, game_type, bet_amount,
+                       max_players, is_private, priv, seed, s_hash)
+        db.room_add_player(room_id, user_id, username, first_name)
+
+        mgr.subscribe_room(ws, room_id)
+
+        room = db.get_room(room_id)
+        await mgr.broadcast({"type": "lobby_rooms_update",
+                              "rooms": db.get_public_rooms()})
+        return {"ok": True, "room": room, "private_key": priv if is_private else None}
+
+    async def join_room(self, ws: WebSocket, msg: dict) -> dict:
+        user_id    = int(msg["user_id"])
+        room_id    = msg.get("room_id", "")
+        priv_key   = msg.get("private_key", "")
+        username   = msg.get("username", "")
+        first_name = msg.get("first_name", "")
+
+        room = db.get_room(room_id)
+        if not room:
+            return {"ok": False, "error": "Комната не найдена"}
+        if room["status"] != "waiting":
+            return {"ok": False, "error": "Игра уже началась или завершена"}
+        if room["is_private"] and room["private_key"] != priv_key:
+            return {"ok": False, "error": "Неверный ключ"}
+        if any(p["user_id"] == user_id for p in room["players"]):
+            mgr.subscribe_room(ws, room_id)
+            return {"ok": True, "room": room, "rejoined": True}
+        if len(room["players"]) >= room["max_players"]:
+            return {"ok": False, "error": "Комната заполнена"}
+
+        user = db.get_user(user_id)
+        if not user or user["balance"] < room["bet_amount"]:
+            return {"ok": False, "error": "Недостаточно средств"}
+
+        db.update_balance(user_id, -room["bet_amount"])
+        db.room_add_player(room_id, user_id, username, first_name)
+        mgr.subscribe_room(ws, room_id)
+
+        room = db.get_room(room_id)
+        await mgr.broadcast_room(room_id, {"type": "lobby_room_update", "room": room})
+        await mgr.broadcast({"type": "lobby_rooms_update",
+                              "rooms": db.get_public_rooms()})
+
+        if len(room["players"]) >= room["max_players"]:
+            asyncio.create_task(self._start_game(room_id))
+
+        return {"ok": True, "room": room}
+
+    async def _start_game(self, room_id: str):
+        room = db.get_room(room_id)
+        if not room or room["status"] != "waiting":
+            return
+
+        db.set_room_status(room_id, "starting")
+        await mgr.broadcast_room(room_id,
+                                  {"type": "lobby_countdown", "room_id": room_id, "seconds": 5})
+        for i in range(4, -1, -1):
+            await asyncio.sleep(1)
+            await mgr.broadcast_room(room_id,
+                                      {"type": "lobby_tick", "room_id": room_id, "seconds": i})
+
+        room    = db.get_room(room_id)
+        players = room["players"]
+        seed    = room["seed"]
+
+        if room["game_type"] == "coin":
+            await self._resolve_coin(room_id, room, players, seed)
+        elif room["game_type"] == "dice":
+            await self._resolve_dice(room_id, room, players, seed, roll_index=0)
+        elif room["game_type"] == "wheel":
+            await self._resolve_wheel(room_id, room, players, seed)
+
+    async def _resolve_coin(self, room_id, room, players, seed):
+        side        = gl.flip_coin(seed)
+        creator_id  = str(room["creator_id"])
+        joiner_id   = str([p["user_id"] for p in players
+                           if str(p["user_id"]) != creator_id][0])
+
+        winner_uid  = creator_id if side == "heads" else joiner_id
+        winner_data = next(p for p in players if str(p["user_id"]) == winner_uid)
+
+        await self._finish_room(room_id, room, players, seed, winner_uid,
+                                {"side": side, "heads_uid": creator_id,
+                                 "tails_uid": joiner_id},
+                                game_type="coin")
+
+    async def _resolve_dice(self, room_id, room, players, seed, roll_index=0):
+        player_ids = [str(p["user_id"]) for p in players]
+        rolls      = gl.roll_dice_for_players(player_ids, seed, roll_index)
+        winners, max_val = gl.resolve_dice(rolls)
+
+        await mgr.broadcast_room(room_id,
+                                  {"type": "lobby_dice_rolled",
+                                   "room_id": room_id, "rolls": rolls,
+                                   "roll_index": roll_index})
+
+        if len(winners) > 1:
+            # Tie — re-roll only tied players after 3 seconds
+            await asyncio.sleep(3)
+            tied_players = [p for p in players if str(p["user_id"]) in winners]
+            await mgr.broadcast_room(room_id,
+                                      {"type": "lobby_dice_reroll",
+                                       "room_id": room_id,
+                                       "tied": [str(p["user_id"]) for p in tied_players]})
+            await self._resolve_dice(room_id, room, tied_players, seed, roll_index + 1)
+            return
+
+        winner_uid = winners[0]
+        await self._finish_room(room_id, room, players, seed, winner_uid,
+                                {"rolls": rolls, "max": max_val},
+                                game_type="dice")
+
+    async def _resolve_wheel(self, room_id, room, players, seed):
+        bets = {str(p["user_id"]): {"amount": room["bet_amount"],
+                                     "username": p["username"],
+                                     "first_name": p["first_name"]}
+                for p in players}
+        winner_uid, ticket, total = gl.pick_wheel_winner(bets, seed)
+        await self._finish_room(room_id, room, players, seed, winner_uid,
+                                {"ticket": ticket, "total": total},
+                                game_type="wheel")
+
+    async def _finish_room(self, room_id, room, players, seed,
+                            winner_uid, extra_result, game_type):
+        winner      = next((p for p in players if str(p["user_id"]) == winner_uid),
+                           players[0])
+        winner_id   = int(winner_uid)
+        total_pot   = room["bet_amount"] * len(players)
+        prize, comm = gl.calc_lobby_prize(total_pot, config.COMMISSION_LOBBY)
+
+        db.update_balance(winner_id, prize)
+
+        for p in players:
+            db.increment_stats(p["user_id"], won=(str(p["user_id"]) == winner_uid))
+
+        ref_id = db.get_referrer_id(winner_id)
+        if ref_id:
+            db.add_ref_balance(ref_id, round(comm * config.REFERRAL_SHARE, 6))
+
+        result = {"winner_uid": winner_uid,
+                  "winner_name": winner.get("username") or winner.get("first_name", ""),
+                  "prize": prize, "total_pot": total_pot,
+                  "seed": seed, "seed_hash": room["seed_hash"],
+                  **extra_result}
+        db.set_room_status(room_id, "ended", result=result)
+        db.save_lobby_history(room_id, game_type, winner_id,
+                               result["winner_name"], total_pot,
+                               players, seed, room["seed_hash"])
+
+        await mgr.broadcast_room(room_id, {"type": "lobby_result",
+                                            "room_id": room_id, "result": result})
+        await mgr.broadcast({"type": "lobby_rooms_update",
+                              "rooms": db.get_public_rooms()})
+
+
+lobby_mgr = LobbyManager()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# WebSocket endpoint
+# ══════════════════════════════════════════════════════════════════════════
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await mgr.connect(websocket)
-    # Send current state immediately
-    await mgr.send(websocket, game.snapshot())
-    # Send last 10 history entries
+    await mgr.send(websocket, pvp_game.snapshot())
     await mgr.send(websocket, {
-        "type":    "history",
-        "all":     db.get_history_all(10),
-        "lucky":   db.get_history_lucky(20),
-        "big":     db.get_history_big(20),
+        "type": "history",
+        "all":   db.get_pvp_history_all(10),
+        "lucky": db.get_pvp_history_lucky(20),
+        "big":   db.get_pvp_history_big(20),
     })
+    await mgr.send(websocket, {"type": "lobby_rooms_update",
+                                "rooms": db.get_public_rooms()})
     try:
         while True:
             raw = await websocket.receive_text()
-            msg = json.loads(raw)
-            await handle_message(websocket, msg)
+            await handle(websocket, json.loads(raw))
     except WebSocketDisconnect:
         mgr.disconnect(websocket)
     except Exception as e:
@@ -267,142 +450,57 @@ async def ws_endpoint(websocket: WebSocket):
         mgr.disconnect(websocket)
 
 
-async def handle_message(ws: WebSocket, msg: dict):
-    action = msg.get("action")
+async def handle(ws: WebSocket, m: dict):
+    action = m.get("action")
 
+    # ── Auth ──
     if action == "auth":
-        user_id    = int(msg["user_id"])
-        username   = msg.get("username", "")
-        first_name = msg.get("first_name", "")
-        ref_id     = msg.get("ref_id")
-
-        existing = db.get_user(user_id)
-        if not existing:
-            db.upsert_user(user_id, username, first_name,
-                           referrer_id=int(ref_id) if ref_id else None)
+        uid  = int(m["user_id"])
+        ref  = int(m["ref_id"]) if m.get("ref_id") else None
+        if not db.get_user(uid):
+            db.upsert_user(uid, m.get("username",""), m.get("first_name",""),
+                           referrer_id=ref)
         else:
-            db.upsert_user(user_id, username, first_name)
+            db.upsert_user(uid, m.get("username",""), m.get("first_name",""))
+        user = db.get_user(uid)
+        refs = db.get_referrals(uid)
+        await mgr.send(ws, {"type": "auth_ok",
+                             "user_id":      uid,
+                             "balance":      user["balance"],
+                             "ref_balance":  user["ref_balance"],
+                             "games_played": user["games_played"],
+                             "games_won":    user["games_won"],
+                             "refs":         len(refs)})
 
-        user = db.get_user(user_id)
-        refs = db.get_referrals(user_id)
-        await mgr.send(ws, {
-            "type":         "auth_ok",
-            "user_id":      user_id,
-            "balance":      user["balance"],
-            "games_played": user["games_played"],
-            "games_won":    user["games_won"],
-            "refs":         len(refs),
-        })
+    # ── PvP bet ──
+    elif action == "pvp_bet":
+        res = await pvp_game.place_bet(
+            int(m["user_id"]), float(m["amount"]),
+            m.get("username",""), m.get("first_name",""))
+        await mgr.send(ws, {"type": "pvp_bet_result", **res})
 
-    elif action == "bet":
-        user_id    = int(msg["user_id"])
-        amount     = float(msg["amount"])
-        username   = msg.get("username", "")
-        first_name = msg.get("first_name", "")
-        result = await game.place_bet(user_id, amount, username, first_name)
-        await mgr.send(ws, {"type": "bet_result", **result})
-
+    # ── Promo ──
     elif action == "promo":
-        user_id = int(msg["user_id"])
-        code    = msg.get("code", "").strip().lower()
+        uid  = int(m["user_id"])
+        code = m.get("code","").strip().lower()
         if code not in config.PROMO_CODES:
             await mgr.send(ws, {"type": "promo_result", "ok": False,
-                                 "error": "Промокод не найден"})
+                                  "error": "Промокод не найден"})
             return
-        if db.promo_used(user_id, code):
+        if db.promo_used(uid, code):
             await mgr.send(ws, {"type": "promo_result", "ok": False,
-                                 "error": "Промокод уже использован"})
+                                  "error": "Уже использован"})
             return
         bonus = config.PROMO_CODES[code]
-        db.update_balance(user_id, bonus)
-        db.mark_promo(user_id, code)
-        user = db.get_user(user_id)
+        db.update_balance(uid, bonus)
+        db.mark_promo(uid, code)
+        user = db.get_user(uid)
         await mgr.send(ws, {"type": "promo_result", "ok": True,
                              "bonus": bonus, "balance": user["balance"]})
 
-    elif action == "get_history":
-        await mgr.send(ws, {
-            "type":  "history",
-            "all":   db.get_history_all(50),
-            "lucky": db.get_history_lucky(20),
-            "big":   db.get_history_big(20),
-        })
-
-    elif action == "legit_check":
-        game_id = int(msg["game_id"])
-        entry   = db.get_history_entry(game_id)
-        if not entry:
-            await mgr.send(ws, {"type": "legit_result", "ok": False,
-                                 "error": "Игра не найдена"})
-            return
-        verify  = gl.verify_round(entry["seed"], entry["seed_hash"], entry["bets"])
-        await mgr.send(ws, {
-            "type":        "legit_result",
-            "ok":          verify["ok"],
-            "game_id":     game_id,
-            "seed":        entry["seed"],
-            "seed_hash":   entry["seed_hash"],
-            "pot":         entry["pot"],
-            "winner_name": entry["winner_name"],
-            "winner_id":   entry["winner_id"],
-            "chance":      entry["chance"],
-            "multiplier":  entry["multiplier"],
-            "bets":        entry["bets"],
-            "ticket":      verify.get("ticket"),
-            "total":       verify.get("total"),
-        })
-
-    elif action == "get_balance":
-        user_id = int(msg["user_id"])
-        user    = db.get_user(user_id)
-        if user:
-            await mgr.send(ws, {"type": "balance", "balance": user["balance"]})
-
-    elif action == "get_referrals":
-        user_id = int(msg["user_id"])
-        refs    = db.get_referrals(user_id)
-        await mgr.send(ws, {"type": "referrals", "refs": refs})
-
-
-# ── REST API (for bot.py) ──────────────────────────────────────────────────
-
-@app.get("/api/user/{user_id}")
-def api_get_user(user_id: int):
-    u = db.get_user(user_id)
-    if not u:
-        raise HTTPException(404, "User not found")
-    return u
-
-
-@app.get("/api/history")
-def api_history():
-    return {
-        "all":   db.get_history_all(20),
-        "lucky": db.get_history_lucky(20),
-        "big":   db.get_history_big(20),
-    }
-
-
-@app.get("/api/legit/{game_id}")
-def api_legit(game_id: int):
-    entry = db.get_history_entry(game_id)
-    if not entry:
-        raise HTTPException(404, "Game not found")
-    result = gl.verify_round(entry["seed"], entry["seed_hash"], entry["bets"])
-    return {**entry, "verify": result}
-
-
-# ── Startup ────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    db.init_db()
-    log.info("Database initialised")
-    await game.ensure_game()
-    log.info(f"Server ready on port {config.PORT}")
-
-
-# ── Entry point ────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=config.PORT, reload=False)
+    # ── Claim referral balance ──
+    elif action == "claim_ref":
+        uid    = int(m["user_id"])
+        user   = db.get_user(uid)
+        if not user or user["ref_balance"] < config.REFERRAL_MIN_WITHDRAW:
+            await mgr.send(ws, {"type": "cl
