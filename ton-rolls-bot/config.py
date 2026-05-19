@@ -2,7 +2,7 @@ BOT_TOKEN    = "8705993863:AAEZzInwvxxF_PTMl1pgeX3RBg0GVrssPcw"
 BOT_USERNAME = "RoyalDuel_bot"
 
 # Set this to your Replit URL after first deploy
-SERVER_URL  = "https://YOUR_REPLIT_URL"
+SERVER_URL  = "https://f1f14bd5-02a3-43d7-93d3-99b7f99fabec-00-cigqs6i95ec0.worf.replit.dev"
 WEBAPP_URL  = SERVER_URL + "/webapp"
 
 # PvP Wheel
