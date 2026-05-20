@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 import config
 import database as db
@@ -32,6 +33,13 @@ def get_referral_share() -> float:
     return db.get_setting("referral_share", config.REFERRAL_SHARE)
 
 app = FastAPI(title="RoyalDuel Server")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 WEBAPP_DIR = Path("webapp")
 app.mount("/static", StaticFiles(directory=str(WEBAPP_DIR)), name="static")
@@ -534,21 +542,14 @@ async def handle(ws: WebSocket, m: dict):
     # ── Promo ──
     elif action == "promo":
         uid  = int(m["user_id"])
-        code = m.get("code","").strip().lower()
-        if code not in config.PROMO_CODES:
+        code = m.get("code", "").strip()
+        result = db.use_promo(code, uid)
+        if result["ok"]:
+            await mgr.send(ws, {"type": "promo_result", "ok": True,
+                                 "bonus": result["ton"], "balance": result["balance"]})
+        else:
             await mgr.send(ws, {"type": "promo_result", "ok": False,
-                                  "error": "Промокод не найден"})
-            return
-        if db.promo_used(uid, code):
-            await mgr.send(ws, {"type": "promo_result", "ok": False,
-                                  "error": "Уже использован"})
-            return
-        bonus = config.PROMO_CODES[code]
-        db.update_balance(uid, bonus)
-        db.mark_promo(uid, code)
-        user = db.get_user(uid)
-        await mgr.send(ws, {"type": "promo_result", "ok": True,
-                             "bonus": bonus, "balance": user["balance"]})
+                                 "error": result["error"]})
 
     # ── Claim referral balance ──
     elif action == "claim_ref":
@@ -616,6 +617,23 @@ async def handle(ws: WebSocket, m: dict):
                                   "balance": user["balance"],
                                   "ref_balance": user["ref_balance"]})
 
+    elif action == "get_stars_rate":
+        # Fetch TON/USD price and compute Stars rate (1 Star ≈ $0.013)
+        import aiohttp as _ah
+        try:
+            async with _ah.ClientSession() as sess:
+                async with sess.get(
+                    "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
+                    timeout=_ah.ClientTimeout(total=4)
+                ) as r:
+                    cg = await r.json()
+            ton_usd = cg["the-open-network"]["usd"]
+            star_usd = 0.013
+            rate = round(star_usd / ton_usd, 6)
+        except Exception:
+            rate = 0.013  # fallback static rate
+        await mgr.send(ws, {"type": "stars_rate", "rate": rate})
+
     # ── Lobby create / join ──
     elif action == "lobby_create":
         res = await lobby_mgr.create_room(ws, m)
@@ -624,6 +642,23 @@ async def handle(ws: WebSocket, m: dict):
     elif action == "lobby_join":
         res = await lobby_mgr.join_room(ws, m)
         await mgr.send(ws, {"type": "lobby_join_result", **res})
+
+    elif action == "lobby_leave":
+        uid = int(m.get("user_id", 0))
+        room_id = m.get("room_id", "")
+        removed = db.room_remove_player(room_id, uid)
+        if removed:
+            room = db.get_room(room_id)
+            if room:
+                await mgr.broadcast_room(room_id, {"type": "lobby_room_update", "room": room})
+                await mgr.broadcast({"type": "lobby_rooms_update",
+                                     "rooms": db.get_public_rooms()})
+            user = db.get_user(uid)
+            await mgr.send(ws, {"type": "lobby_leave_result", "ok": True,
+                                 "balance": user["balance"] if user else 0})
+        else:
+            await mgr.send(ws, {"type": "lobby_leave_result", "ok": False,
+                                 "error": "Невозможно покинуть (игра уже начата или вы не в комнате)"})
 
     elif action == "lobby_subscribe":
         room_id = m.get("room_id","")
@@ -646,6 +681,7 @@ async def handle(ws: WebSocket, m: dict):
         await mgr.send(ws, {
             "type": "admin_data",
             "users": users,
+            "promos": db.get_all_promos(),
             "settings": {
                 "commission_pvp":   db.get_setting("commission_pvp",   config.COMMISSION_PVP),
                 "commission_lobby": db.get_setting("commission_lobby",  config.COMMISSION_LOBBY),
@@ -714,6 +750,38 @@ async def handle(ws: WebSocket, m: dict):
         db.set_referrer(target_uid, new_ref)
         await mgr.send(ws, {"type": "admin_result", "ok": True,
                              "target_uid": target_uid, "new_referrer_id": new_ref})
+
+    elif action == "admin_create_promo":
+        uid = int(m.get("user_id", 0))
+        if uid != config.ADMIN_ID:
+            await mgr.send(ws, {"type": "error", "error": "Forbidden"})
+            return
+        code = str(m.get("code", "")).strip().upper()
+        ton = float(m.get("ton", 0))
+        max_uses = int(m.get("max_uses", 1))
+        promo_type = str(m.get("promo_type", "once_per_user"))
+        cooldown_sec = int(m.get("cooldown_sec", 0))
+        if not code or ton <= 0 or max_uses <= 0:
+            await mgr.send(ws, {"type": "admin_result", "ok": False,
+                                 "promo_action": "created", "error": "Неверные параметры"})
+            return
+        ok = db.create_promo(code, ton, max_uses, promo_type, cooldown_sec)
+        if ok:
+            await mgr.send(ws, {"type": "admin_result", "ok": True,
+                                 "promo_action": "created", "code": code})
+        else:
+            await mgr.send(ws, {"type": "admin_result", "ok": False,
+                                 "promo_action": "created", "error": f"Код {code} уже существует"})
+
+    elif action == "admin_delete_promo":
+        uid = int(m.get("user_id", 0))
+        if uid != config.ADMIN_ID:
+            await mgr.send(ws, {"type": "error", "error": "Forbidden"})
+            return
+        code = str(m.get("code", "")).upper()
+        db.delete_promo(code)
+        await mgr.send(ws, {"type": "admin_result", "ok": True,
+                             "promo_action": "deleted", "code": code})
 
 
 # ══════════════════════════════════════════════════════════════════════════
