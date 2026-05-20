@@ -388,7 +388,9 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
     <div style="display:flex;flex-direction:column;gap:4px;flex:1">
       <div class="hist-block">
         <div class="hist-label">Пред. игра</div>
-        <div class="hist-val" id="lastVal">— TON</div>
+        <div id="lastGameCard" style="display:flex;align-items:center;gap:5px;margin-top:3px">
+          <span class="hist-val" id="lastVal">— TON</span>
+        </div>
       </div>
       <div class="hist-btn" onclick="setPage('hist')" title="История">🕐</div>
     </div>
@@ -399,7 +401,9 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
     </div>
     <div class="hist-block" style="text-align:right;flex:1;align-items:flex-end;display:flex;flex-direction:column">
       <div class="hist-label">Топ игра</div>
-      <div class="hist-val" id="topVal">— TON</div>
+      <div id="topGameCard" style="display:flex;align-items:center;gap:5px;margin-top:3px;justify-content:flex-end">
+        <span class="hist-val" id="topVal">— TON</span>
+      </div>
     </div>
   </div>
   <div class="wheel-wrap">
@@ -411,17 +415,34 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
   <div class="pvp-bottom">
     <div class="balance-row">
       <div class="bal-display">
-        <div class="ton-dot">T</div>
+        <div class="ton-dot" id="balDot">T</div>
         <span class="bal-num" id="balDisp">—</span>
+      </div>
+      <!-- Stars / TON toggle -->
+      <div style="display:flex;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px;gap:2px">
+        <button id="btnTON" onclick="setCurrency('TON')"
+          style="background:var(--accent);color:#000;border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:900;cursor:pointer;transition:all .2s">TON</button>
+        <button id="btnSTARS" onclick="setCurrency('STARS')"
+          style="background:transparent;color:var(--muted);border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s">⭐ Stars</button>
       </div>
       <div class="edit-btn" onclick="openM('bedModal')">✍️</div>
     </div>
-    <div class="bet-grid">
-      <button class="bet-btn" onclick="placePvpBet(0)"><div class="b-icon">T</div><div class="b-val" id="bb0">0.1</div></button>
-      <button class="bet-btn" onclick="placePvpBet(1)"><div class="b-icon">T</div><div class="b-val" id="bb1">0.5</div></button>
-      <button class="bet-btn" onclick="placePvpBet(2)"><div class="b-icon">T</div><div class="b-val" id="bb2">1</div></button>
-      <button class="bet-btn allin" onclick="placePvpBet('allin')"><div class="b-val">All In</div></button>
+    <div id="starsRateRow" style="display:none;font-size:10px;color:var(--muted);text-align:center;margin-bottom:4px">
+      1 ⭐ = <span id="starsRateVal">0.013</span> TON · у вас <span id="starsBalDisp">—</span> ⭐
     </div>
+    <div class="bet-grid" id="betGrid">
+      <button class="bet-btn" id="betBtn0" onclick="selectBet(0)"><div class="b-icon" id="bi0">T</div><div class="b-val" id="bb0">0.1</div></button>
+      <button class="bet-btn" id="betBtn1" onclick="selectBet(1)"><div class="b-icon" id="bi1">T</div><div class="b-val" id="bb1">0.5</div></button>
+      <button class="bet-btn" id="betBtn2" onclick="selectBet(2)"><div class="b-icon" id="bi2">T</div><div class="b-val" id="bb2">1</div></button>
+      <button class="bet-btn allin" id="betBtnAllin" onclick="selectBet('allin')"><div class="b-val">All In</div></button>
+    </div>
+    <!-- Confirm strip -->
+    <button id="confirmBetBtn" onclick="confirmBet()"
+      style="width:100%;margin-top:8px;padding:13px 0;border-radius:14px;border:none;
+             background:#2a2a35;color:#555;font-size:15px;font-weight:900;
+             letter-spacing:.05em;cursor:pointer;transition:all .25s;pointer-events:none">
+      ПОДТВЕРДИТЬ
+    </button>
   </div>
 </div>
 
@@ -503,6 +524,19 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
       </div>
     </div>
 
+    <!-- WHEEL area (lobby mode 3) -->
+    <div class="wheel-area" id="lobbyWheelArea" style="display:none;flex-direction:column;align-items:center;gap:10px">
+      <div style="position:relative;width:240px;height:240px;flex-shrink:0">
+        <canvas id="lobbyWheelCanvas" width="240" height="240" style="display:block"></canvas>
+        <!-- Arrow pointer -->
+        <div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:22px solid var(--accent);filter:drop-shadow(0 0 6px var(--accent))"></div>
+      </div>
+      <div class="dice-status-row">
+        <div class="dice-countdown" id="lwCountdown" style="display:none">5</div>
+        <div class="dice-status-text" id="lwStatus">Ожидание игроков…</div>
+      </div>
+    </div>
+
     <!-- result banner -->
     <div class="rv-result-banner" id="rvResultBanner">
       <div class="rv-result-icon" id="rvResultIcon">🏆</div>
@@ -515,6 +549,23 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
     <!-- waiting msg -->
     <div class="rv-waiting-msg" id="rvWaitingMsg" style="display:none">
       ⏳ Ожидаем игроков — поделись ключом или ссылкой на комнату
+    </div>
+
+    <!-- observer/join/leave controls -->
+    <div id="rvObserverBadge" style="display:none;text-align:center;font-size:12px;color:var(--muted);padding:4px 0;flex-shrink:0">
+      👁 Вы наблюдатель — нажмите «Присоединиться» чтобы сыграть
+    </div>
+    <div id="rvJoinBar" style="display:none;padding:0 0 4px;flex-shrink:0">
+      <button onclick="roomJoin()"
+        style="width:100%;background:var(--accent);color:#000;border:none;border-radius:12px;padding:12px;font-weight:900;font-size:14px;cursor:pointer">
+        ➕ Присоединиться
+      </button>
+    </div>
+    <div id="rvLeaveBar" style="display:none;padding:0 0 4px;flex-shrink:0">
+      <button id="rvLeaveBtn" onclick="roomLeave()"
+        style="width:100%;background:var(--surface2);border:1px solid rgba(255,85,85,.4);border-radius:12px;padding:11px;font-weight:700;font-size:13px;color:#ff5555;cursor:pointer">
+        🚪 Покинуть игру
+      </button>
     </div>
 
     <!-- players list -->
@@ -576,69 +627,104 @@ body{font-family:'Exo 2',sans-serif;color:var(--text);}
 </div>
 
 <!-- ═══════════ ADMIN PAGE ═══════════ -->
-<div id="adminPage" class="page" style="display:none">
+<div id="adminPage" class="page" style="display:none;overflow-y:auto">
   <div class="prof-head"><h2>⚙️ ADMIN</h2></div>
 
-  <!-- Balance control -->
+  <!-- Balance control — horizontal scroll on mobile -->
   <div class="prof-card" style="margin-bottom:12px">
     <div class="menu-title" style="font-size:13px;color:var(--accent);margin-bottom:10px;letter-spacing:.05em">БАЛАНС ИГРОКА</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px">
-      <input id="adTarget" placeholder="@username или ID" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
-      <select id="adOp" style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:13px;outline:none">
-        <option value="+">+ Добавить</option>
-        <option value="-">- Отнять</option>
-        <option value="=">=  Установить</option>
-      </select>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
+      <div style="display:flex;gap:8px;margin-bottom:8px;min-width:480px">
+        <input id="adTarget" placeholder="@username или ID" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
+        <select id="adOp" style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:13px;outline:none;min-width:120px">
+          <option value="+">+ Добавить</option>
+          <option value="-">- Отнять</option>
+          <option value="=">=  Установить</option>
+        </select>
+        <input id="adVal" type="number" step="0.01" min="0" placeholder="TON" style="width:100px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
+        <button onclick="adminSetBalance()" style="background:var(--accent);color:#000;border:none;border-radius:10px;padding:9px 18px;font-weight:900;font-size:13px;cursor:pointer;white-space:nowrap">OK</button>
+      </div>
     </div>
-    <div style="display:flex;gap:8px">
-      <input id="adVal" type="number" step="0.01" min="0" placeholder="Сумма TON" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
-      <button onclick="adminSetBalance()" style="background:var(--accent);color:#000;border:none;border-radius:10px;padding:9px 18px;font-weight:900;font-size:13px;cursor:pointer">OK</button>
-    </div>
-    <div id="adBalMsg" style="font-size:12px;margin-top:8px;color:var(--muted);min-height:16px"></div>
+    <div id="adBalMsg" style="font-size:12px;margin-top:4px;color:var(--muted);min-height:16px"></div>
   </div>
 
-  <!-- Commission settings -->
+  <!-- Commission settings — vertical scroll built-in -->
   <div class="prof-card" style="margin-bottom:12px">
     <div class="menu-title" style="font-size:13px;color:var(--accent);margin-bottom:10px;letter-spacing:.05em">КОМИССИИ</div>
-    <div style="display:grid;gap:8px">
+    <div style="overflow-y:auto;max-height:180px;-webkit-overflow-scrolling:touch;display:grid;gap:8px;padding-right:2px">
       <div style="display:flex;align-items:center;gap:8px">
         <span style="flex:1;font-size:13px;color:var(--muted)">PvP колесо (%)</span>
-        <input id="adCommPvp" type="number" step="1" min="0" max="100" style="width:72px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:13px;outline:none;text-align:center">
-        <button onclick="adminSetSetting('commission_pvp',parseFloat(document.getElementById('adCommPvp').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 14px;color:var(--text);font-size:12px;cursor:pointer">Сохранить</button>
+        <input id="adCommPvp" type="number" step="1" min="0" max="100" style="width:64px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 8px;color:var(--text);font-size:13px;outline:none;text-align:center">
+        <button onclick="adminSetSetting('commission_pvp',parseFloat(document.getElementById('adCommPvp').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:11px;cursor:pointer;white-space:nowrap">Сохранить</button>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span style="flex:1;font-size:13px;color:var(--muted)">Lobby игры (%)</span>
-        <input id="adCommLobby" type="number" step="1" min="0" max="100" style="width:72px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:13px;outline:none;text-align:center">
-        <button onclick="adminSetSetting('commission_lobby',parseFloat(document.getElementById('adCommLobby').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 14px;color:var(--text);font-size:12px;cursor:pointer">Сохранить</button>
+        <span style="flex:1;font-size:13px;color:var(--muted)">Lobby (%)</span>
+        <input id="adCommLobby" type="number" step="1" min="0" max="100" style="width:64px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 8px;color:var(--text);font-size:13px;outline:none;text-align:center">
+        <button onclick="adminSetSetting('commission_lobby',parseFloat(document.getElementById('adCommLobby').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:11px;cursor:pointer;white-space:nowrap">Сохранить</button>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <span style="flex:1;font-size:13px;color:var(--muted)">Реф. доля (%)</span>
-        <input id="adCommRef" type="number" step="1" min="0" max="100" style="width:72px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:13px;outline:none;text-align:center">
-        <button onclick="adminSetSetting('referral_share',parseFloat(document.getElementById('adCommRef').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 14px;color:var(--text);font-size:12px;cursor:pointer">Сохранить</button>
+        <input id="adCommRef" type="number" step="1" min="0" max="100" style="width:64px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 8px;color:var(--text);font-size:13px;outline:none;text-align:center">
+        <button onclick="adminSetSetting('referral_share',parseFloat(document.getElementById('adCommRef').value)/100)" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text);font-size:11px;cursor:pointer;white-space:nowrap">Сохранить</button>
       </div>
     </div>
     <div id="adSettMsg" style="font-size:12px;margin-top:8px;color:var(--muted);min-height:16px"></div>
   </div>
 
-  <!-- Change referrer -->
+  <!-- Change referrer — horizontal scroll -->
   <div class="prof-card" style="margin-bottom:12px">
     <div class="menu-title" style="font-size:13px;color:var(--accent);margin-bottom:10px;letter-spacing:.05em">ИЗМЕНИТЬ РЕФЕРЕРА</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px">
-      <input id="adRefTarget" placeholder="ID игрока" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
-      <input id="adRefNew" placeholder="ID нового рефа (пусто = убрать)" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
+      <div style="display:flex;gap:8px;margin-bottom:8px;min-width:440px">
+        <input id="adRefTarget" placeholder="ID игрока" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
+        <input id="adRefNew" placeholder="ID нового рефа (пусто = убрать)" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none">
+        <button onclick="adminSetReferrer()" style="background:var(--accent);color:#000;border:none;border-radius:10px;padding:9px 14px;font-weight:900;font-size:13px;cursor:pointer;white-space:nowrap">OK</button>
+      </div>
     </div>
-    <button onclick="adminSetReferrer()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px;color:var(--text);font-size:13px;cursor:pointer">Сохранить реферера</button>
-    <div id="adRefMsg" style="font-size:12px;margin-top:8px;color:var(--muted);min-height:16px"></div>
+    <div id="adRefMsg" style="font-size:12px;margin-top:4px;color:var(--muted);min-height:16px"></div>
   </div>
 
-  <!-- Users list -->
-  <div class="prof-card">
+  <!-- Promo codes management -->
+  <div class="prof-card" style="margin-bottom:12px">
+    <div class="menu-title" style="font-size:13px;color:var(--accent);margin-bottom:10px;letter-spacing:.05em">ПРОМОКОДЫ</div>
+
+    <!-- Create promo form — horizontal scroll -->
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px">
+      <div style="min-width:500px;display:grid;gap:8px">
+        <div style="display:flex;gap:8px">
+          <input id="adPromoCode" placeholder="ПРОМОКОД" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-size:13px;outline:none;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+          <input id="adPromoTon" type="number" step="0.01" min="0.01" placeholder="TON" style="width:90px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:13px;outline:none">
+          <input id="adPromoUses" type="number" step="1" min="1" placeholder="Акт." title="Кол-во активаций" style="width:72px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:13px;outline:none">
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="adPromoType" onchange="adminPromoTypeChange()" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:12px;outline:none">
+            <option value="once_per_user">1 раз на пользователя</option>
+            <option value="unlimited">Без ограничений на пользователя</option>
+            <option value="cooldown">Раз в N секунд на пользователя</option>
+          </select>
+          <input id="adPromoCooldown" type="number" min="1" placeholder="сек" title="Кулдаун в секундах" style="display:none;width:72px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);font-size:13px;outline:none">
+          <button onclick="adminCreatePromo()" style="background:var(--accent);color:#000;border:none;border-radius:10px;padding:9px 16px;font-weight:900;font-size:13px;cursor:pointer;white-space:nowrap">Создать</button>
+        </div>
+      </div>
+    </div>
+    <div id="adPromoMsg" style="font-size:12px;margin-top:6px;color:var(--muted);min-height:16px"></div>
+
+    <!-- Active promos list -->
+    <div style="margin-top:10px;overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <div id="adPromoList" style="min-width:420px;display:grid;gap:6px;max-height:220px;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <!-- Users list — horizontal + vertical scroll -->
+  <div class="prof-card" style="margin-bottom:70px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div class="menu-title" style="font-size:13px;color:var(--accent);letter-spacing:.05em">ВСЕ ПОЛЬЗОВАТЕЛИ</div>
-      <button onclick="adminRefresh()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 12px;color:var(--muted);font-size:11px;cursor:pointer">↻ Обновить</button>
+      <button onclick="adminRefresh()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 12px;color:var(--muted);font-size:11px;cursor:pointer">↻</button>
     </div>
     <input id="adSearch" placeholder="Поиск по @username или ID…" oninput="adminFilterUsers()" style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;margin-bottom:10px">
-    <div id="adUsersList" style="max-height:55vh;overflow-y:auto;display:grid;gap:6px"></div>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <div id="adUsersList" style="min-width:420px;display:grid;gap:6px;max-height:55vh;overflow-y:auto"></div>
+    </div>
   </div>
 </div>
 
@@ -907,6 +993,9 @@ let S={
   histAll:[],histLucky:[],histBig:[],histTab:'all',
   gamesPlayed:0,gamesWon:0,refs:0,
   rooms:[], lobbyHist:[],
+  currency:'TON',   // 'TON' | 'STARS'
+  starsRate:0.013,  // 1 star = 0.013 TON (updated dynamically)
+  starsBal:null,
 };
 
 // current room state (in-memory for the open room view)
@@ -917,6 +1006,7 @@ let room={
   creatorId:null,
   diceRolls:{}, rollIndex:0,
   coinSide:null,   // heads|tails
+  countdown:99,    // seconds left before game starts (for leave-lock)
 };
 
 let ws=null,wsReady=false;
@@ -954,6 +1044,18 @@ function handleMsg(m){
       if(m.is_admin)initAdminTab();
       break;
 
+    case 'stars_rate':
+      S.starsRate=m.rate||0.013;
+      S.starsBal=S.balance!==null?Math.floor(S.balance/S.starsRate):null;
+      document.getElementById('starsRateVal').textContent=S.starsRate.toFixed(4);
+      document.getElementById('starsBalDisp').textContent=S.starsBal??'—';
+      if(S.currency==='STARS'){syncBalance();}
+      S.betValues.forEach((v,i)=>{
+        const lbl=document.getElementById('bb'+i);
+        if(lbl&&S.currency==='STARS')lbl.textContent=Math.round(v/S.starsRate);
+      });
+      break;
+
     case 'balance_update':
       S.balance=m.balance;S.refBal=m.ref_balance||S.refBal;
       syncBalance();break;
@@ -970,7 +1072,7 @@ function handleMsg(m){
       if(m.game_id===S.pvpGameId){S.pvpTimer=m.timer;syncPvpTimer();}break;
 
     case 'pvp_spinning':
-      S.pvpStatus='spinning';setPvpTimerSpin();break;
+      S.pvpStatus='spinning';setPvpTimerSpin();resetConfirmStrip();break;
 
     case 'pvp_result':
       handlePvpResult(m);break;
@@ -986,9 +1088,32 @@ function handleMsg(m){
 
     case 'history':
       S.histAll=m.all||[];S.histLucky=m.lucky||[];S.histBig=m.big||[];
-      if(S.histAll.length)document.getElementById('lastVal').textContent=S.histAll[0].pot.toFixed(2)+' TON';
+      if(S.histAll.length){
+        const g=S.histAll[0];
+        document.getElementById('lastVal').textContent=g.pot.toFixed(2)+' TON';
+        const lc=document.getElementById('lastGameCard');
+        if(lc&&g.winner_id){
+          fetchAvatar(g.winner_id);
+          lc.innerHTML=`${avatarHTML(g.winner_id,(g.winner_name||'?')[0],COLORS[0],'20px')}
+            <div style="display:flex;flex-direction:column;line-height:1.1">
+              <span class="hist-val" id="lastVal" style="font-size:11px">${g.pot.toFixed(2)} T</span>
+              <span style="font-size:9px;color:var(--muted)">${g.chance.toFixed(1)}%</span>
+            </div>`;
+        }
+      }
       const bigG=[...S.histBig].sort((a,b)=>b.pot-a.pot)[0];
-      if(bigG)document.getElementById('topVal').textContent=bigG.pot.toFixed(2)+' TON';
+      if(bigG){
+        document.getElementById('topVal').textContent=bigG.pot.toFixed(2)+' TON';
+        const tc=document.getElementById('topGameCard');
+        if(tc&&bigG.winner_id){
+          fetchAvatar(bigG.winner_id);
+          tc.innerHTML=`<div style="display:flex;flex-direction:column;line-height:1.1;text-align:right">
+              <span class="hist-val" id="topVal" style="font-size:11px">${bigG.pot.toFixed(2)} T</span>
+              <span style="font-size:9px;color:var(--muted)">${bigG.chance.toFixed(1)}%</span>
+            </div>
+            ${avatarHTML(bigG.winner_id,(bigG.winner_name||'?')[0],COLORS[1],'20px')}`;
+        }
+      }
       renderHist();break;
 
     case 'promo_result':
@@ -1015,16 +1140,26 @@ function handleMsg(m){
       S.rooms=m.rooms||[];renderRooms();break;
 
     // Room-specific events
+    case 'lobby_leave_result':
+      if(m.ok){
+        S.balance=m.balance;syncBalance();
+        // Remove self from local room
+        room.players=room.players.filter(p=>String(p.user_id)!==String(MY_ID));
+        syncRoomControls();renderRoomPlayers();
+        toast('Вы покинули игру','');
+      } else toast(m.error||'Нельзя покинуть','red');
+      break;
+
     case 'lobby_room_update':
       if(room.id===m.room?.room_id){
         updateRoomFromServer(m.room);
       }break;
 
     case 'lobby_countdown':
-      if(room.id===m.room_id) startRoomCountdown(m.seconds);break;
+      if(room.id===m.room_id){room.countdown=m.seconds;room.status='starting';startRoomCountdown(m.seconds);syncRoomControls();}break;
 
     case 'lobby_tick':
-      if(room.id===m.room_id) tickRoomCountdown(m.seconds);break;
+      if(room.id===m.room_id){room.countdown=m.seconds;tickRoomCountdown(m.seconds);syncRoomControls();}break;
 
     case 'lobby_dice_rolled':
       if(room.id===m.room_id) animateDiceRolls(m.rolls,m.roll_index);break;
@@ -1050,7 +1185,8 @@ function handleMsg(m){
 
     case 'lobby_join_result':
       if(m.ok){closeM('joinModal');if(m.room)enterRoom(m.room,null);}
-      else toast(m.error,'red');break;
+      else toast(m.error,'red');
+      syncRoomControls();break;
 
     case 'admin_data':
       renderAdminPanel(m);break;
@@ -1073,6 +1209,19 @@ function betsArr(){
     color:COLORS[i%COLORS.length],isMe:parseInt(uid)===MY_ID,
   }));
 }
+// Avatar image cache for canvas drawing
+const _canvasAvatarImg={};
+function _getCanvasImg(userId,color,cb){
+  const id=String(userId);
+  if(_canvasAvatarImg[id]){cb(_canvasAvatarImg[id]);return;}
+  const url=getAvatarURL(id);
+  if(!url){cb(null);return;}
+  const img=new Image();
+  img.onload=()=>{_canvasAvatarImg[id]=img;cb(img);};
+  img.onerror=()=>cb(null);
+  img.src=url;
+}
+
 function drawWheel(offset=0,arr=null){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   const bets=arr||betsArr();
@@ -1090,10 +1239,30 @@ function drawWheel(offset=0,arr=null){
       ctx.fillStyle=b.color;ctx.fill();
       ctx.strokeStyle='rgba(255,255,255,.15)';ctx.lineWidth=1.5;ctx.stroke();
       if(sl>0.15){
-        const mid=ang+sl/2,ax=CX+Math.cos(mid)*R*.63,ay=CY+Math.sin(mid)*R*.63,ar=Math.min(20,R*sl*.26);
-        ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.55)';ctx.fill();
-        ctx.strokeStyle=b.color;ctx.lineWidth=2;ctx.stroke();
-        if(ar>9){ctx.fillStyle='#fff';ctx.font=`bold ${Math.max(9,ar*.65)}px 'Exo 2'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText((b.name||'?')[0].toUpperCase(),ax,ay);}
+        const mid=ang+sl/2,ax=CX+Math.cos(mid)*R*.63,ay=CY+Math.sin(mid)*R*.63;
+        const ar=Math.min(20,R*sl*.26);
+        const imgObj=_canvasAvatarImg[String(b.uid)];
+        ctx.save();
+        ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);ctx.closePath();
+        if(imgObj&&ar>7){
+          ctx.clip();ctx.drawImage(imgObj,ax-ar,ay-ar,ar*2,ar*2);
+          ctx.restore();
+          ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);
+          ctx.strokeStyle=b.color;ctx.lineWidth=2;ctx.stroke();
+        } else {
+          ctx.fillStyle='rgba(0,0,0,.55)';ctx.fill();ctx.restore();
+          ctx.beginPath();ctx.arc(ax,ay,ar,0,Math.PI*2);
+          ctx.strokeStyle=b.color;ctx.lineWidth=2;ctx.stroke();
+          if(ar>9){ctx.fillStyle='#fff';ctx.font=`bold ${Math.max(9,ar*.65)}px 'Exo 2'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText((b.name||'?')[0].toUpperCase(),ax,ay);}
+        }
+        // Trigger load and redraw if avatar not cached yet
+        if(!_canvasAvatarImg[String(b.uid)]){
+          fetchAvatar(b.uid,()=>{
+            const im=new Image();
+            im.onload=()=>{_canvasAvatarImg[String(b.uid)]=im;drawWheel(offset,arr||null);};
+            im.src=getAvatarURL(b.uid)||'';
+          });
+        }
       }
       ang=end;
     });
@@ -1157,11 +1326,94 @@ function showPvpWinPopup(m){
   else{av.textContent=(m.winner_name||'?')[0].toUpperCase();}
   document.getElementById('winPopup').classList.add('show');
 }
-function placePvpBet(idx){
+// ── Pending bet state ──
+let pendingBetIdx = null;
+
+function selectBet(idx){
   if(!requireAuth())return;
   if(S.pvpStatus==='spinning'){toast('Ставки закрыты','red');return;}
   if(S.balance===null){toast('Подождите…','red');return;}
-  const amount=idx==='allin'?S.balance:parseFloat(S.betValues[idx]);
+
+  const confirmBtn=document.getElementById('confirmBetBtn');
+
+  // Toggle off if same button clicked again
+  if(pendingBetIdx===idx){
+    pendingBetIdx=null;
+    // deactivate all bet buttons
+    ['betBtn0','betBtn1','betBtn2','betBtnAllin'].forEach(id=>{
+      const b=document.getElementById(id);
+      if(b)b.style.boxShadow='';
+    });
+    // dim confirm strip
+    confirmBtn.style.cssText='width:100%;margin-top:8px;padding:13px 0;border-radius:14px;'+
+      'border:none;background:#2a2a35;color:#555;font-size:15px;font-weight:900;'+
+      'letter-spacing:.05em;cursor:pointer;transition:all .25s;pointer-events:none';
+    return;
+  }
+
+  // Select new bet
+  pendingBetIdx=idx;
+
+  // Highlight selected button
+  ['betBtn0','betBtn1','betBtn2','betBtnAllin'].forEach((id,i)=>{
+    const b=document.getElementById(id);
+    if(!b)return;
+    const isSelected=(i<3&&i===idx)||(idx==='allin'&&id==='betBtnAllin');
+    b.style.boxShadow=isSelected?'0 0 0 2px var(--accent)':'';
+  });
+
+  // Compute display amount for label
+  let dispAmt;
+  if(S.currency==='STARS'){
+    const starsCount=idx==='allin'
+      ? Math.floor(S.balance/S.starsRate)
+      : Math.round(S.betValues[idx]/S.starsRate);
+    dispAmt=`${starsCount} ⭐`;
+  } else {
+    const raw=idx==='allin'?S.balance:parseFloat(S.betValues[idx]);
+    dispAmt=`${raw.toFixed(2)} TON`;
+  }
+
+  // Light up confirm strip
+  confirmBtn.style.cssText='width:100%;margin-top:8px;padding:13px 0;border-radius:14px;'+
+    'border:none;background:var(--accent);color:#000;font-size:15px;font-weight:900;'+
+    'letter-spacing:.05em;cursor:pointer;transition:all .25s;pointer-events:auto;'+
+    'box-shadow:0 0 18px rgba(0,255,136,.35)';
+  confirmBtn.textContent=`ПОДТВЕРДИТЬ ${dispAmt}`;
+}
+
+function confirmBet(){
+  if(pendingBetIdx===null)return;
+  const idx=pendingBetIdx;
+  pendingBetIdx=null;
+
+  // Reset confirm strip
+  const confirmBtn=document.getElementById('confirmBetBtn');
+  confirmBtn.style.cssText='width:100%;margin-top:8px;padding:13px 0;border-radius:14px;'+
+    'border:none;background:#2a2a35;color:#555;font-size:15px;font-weight:900;'+
+    'letter-spacing:.05em;cursor:pointer;transition:all .25s;pointer-events:none';
+  confirmBtn.textContent='ПОДТВЕРДИТЬ';
+  ['betBtn0','betBtn1','betBtn2','betBtnAllin'].forEach(id=>{
+    const b=document.getElementById(id);
+    if(b)b.style.boxShadow='';
+  });
+
+  // Now actually place the bet
+  if(S.pvpStatus==='spinning'){toast('Ставки закрыты','red');return;}
+  if(S.balance===null){toast('Подождите…','red');return;}
+
+  let amount;
+  if(S.currency==='STARS'){
+    const starsCount=idx==='allin'
+      ? Math.floor(S.balance/S.starsRate)
+      : Math.round(S.betValues[idx]/S.starsRate);
+    if(starsCount<=0){toast('Недостаточно Stars','red');return;}
+    amount=+(starsCount*S.starsRate).toFixed(6);
+    toast(`${starsCount} ⭐ → ${amount.toFixed(3)} TON`,'');
+  } else {
+    amount=idx==='allin'?S.balance:parseFloat(S.betValues[idx]);
+  }
+
   if(amount<=0||S.balance<amount){toast('Недостаточно средств','red');return;}
   const uid=String(MY_ID);
   if(S.pvpBets[uid])S.pvpBets[uid].amount=+(S.pvpBets[uid].amount+amount).toFixed(6);
@@ -1170,6 +1422,21 @@ function placePvpBet(idx){
   S.balance=+(S.balance-amount).toFixed(6);
   syncBalance();syncWheel();
   send({action:'pvp_bet',user_id:MY_ID,amount,username:MY_NAME,first_name:TGU?.first_name||''});
+}
+
+// Also reset confirm strip when spinning starts
+function resetConfirmStrip(){
+  pendingBetIdx=null;
+  const confirmBtn=document.getElementById('confirmBetBtn');
+  if(!confirmBtn)return;
+  confirmBtn.style.cssText='width:100%;margin-top:8px;padding:13px 0;border-radius:14px;'+
+    'border:none;background:#2a2a35;color:#555;font-size:15px;font-weight:900;'+
+    'letter-spacing:.05em;cursor:pointer;transition:all .25s;pointer-events:none';
+  confirmBtn.textContent='ПОДТВЕРДИТЬ';
+  ['betBtn0','betBtn1','betBtn2','betBtnAllin'].forEach(id=>{
+    const b=document.getElementById(id);
+    if(b)b.style.boxShadow='';
+  });
 }
 
 // ══════════════════════════════════════
@@ -1197,9 +1464,43 @@ function clickRoom(rid){
   send({action:'lobby_subscribe',room_id:rid});
   const r=S.rooms.find(x=>x.room_id===rid);
   if(!r)return;
-  const inRoom=r.players.some(p=>p.user_id===MY_ID);
-  if(inRoom){enterRoom(r,null);}
-  else{send({action:'lobby_join',user_id:MY_ID,room_id:rid,username:MY_NAME,first_name:TGU?.first_name||''});}
+  // Always open room view — user can choose to join or observe
+  enterRoom(r,null);
+}
+
+function syncRoomControls(){
+  const inRoom=room.players.some(p=>String(p.user_id)===String(MY_ID));
+  const isWaiting=room.status==='waiting';
+  const isFull=room.players.length>=room.maxPlayers;
+  const secsLeft=(typeof room.countdown==='number')?room.countdown:99;
+
+  // Observer badge
+  document.getElementById('rvObserverBadge').style.display=(!inRoom&&isWaiting&&!isFull)?'block':'none';
+  // Join button: show if observer + room waiting + not full
+  document.getElementById('rvJoinBar').style.display=(!inRoom&&isWaiting&&!isFull)?'block':'none';
+  // Leave button: show if in room + waiting + more than 3 seconds left
+  const leaveBar=document.getElementById('rvLeaveBar');
+  const leaveBtn=document.getElementById('rvLeaveBtn');
+  leaveBar.style.display=(inRoom&&isWaiting)?'block':'none';
+  if(leaveBtn){
+    const locked=secsLeft<=3&&secsLeft>=0;
+    leaveBtn.disabled=locked;
+    leaveBtn.style.opacity=locked?'0.4':'1';
+    leaveBtn.style.cursor=locked?'not-allowed':'pointer';
+    leaveBtn.textContent=locked?`🔒 Покинуть (${secsLeft}с)`:'🚪 Покинуть игру';
+  }
+}
+
+function roomJoin(){
+  if(!requireAuth())return;
+  send({action:'lobby_join',user_id:MY_ID,room_id:room.id,
+        username:MY_NAME,first_name:TGU?.first_name||''});
+}
+
+function roomLeave(){
+  if(!room.id)return;
+  if((room.countdown??99)<=3){toast('Слишком поздно покидать игру','red');return;}
+  send({action:'lobby_leave',user_id:MY_ID,room_id:room.id});
 }
 
 // ══════════════════════════════════════
@@ -1237,11 +1538,13 @@ function enterRoom(serverRoom,privKey){
   // show/hide game areas
   document.getElementById('diceArea').style.display=room.type==='dice'?'flex':'none';
   document.getElementById('coinArea').style.display=room.type==='coin'?'flex':'none';
+  document.getElementById('lobbyWheelArea').style.display=room.type==='wheel'?'flex':'none';
   document.getElementById('rvResultBanner').classList.remove('show');
 
   // build initial UI
   if(room.type==='dice') buildDiceArena();
   if(room.type==='coin') buildCoinArea();
+  if(room.type==='wheel') buildLobbyWheel();
   renderRoomPlayers();
 
   // waiting message
@@ -1249,6 +1552,7 @@ function enterRoom(serverRoom,privKey){
   document.getElementById('rvWaitingMsg').style.display=needMore?'block':'none';
 
   document.getElementById('roomView').classList.add('active');
+  document.querySelector('.tabbar').style.display='none';
 }
 
 function updateRoomFromServer(sr){
@@ -1256,6 +1560,7 @@ function updateRoomFromServer(sr){
   room.status=sr.status||room.status;
   if(room.type==='dice') buildDiceArena();
   if(room.type==='coin') buildCoinArea();
+  if(room.type==='wheel') buildLobbyWheel();
   renderRoomPlayers();
   const needMore=room.players.length<room.maxPlayers;
   document.getElementById('rvWaitingMsg').style.display=needMore?'block':'none';
@@ -1263,6 +1568,7 @@ function updateRoomFromServer(sr){
 
 function closeRoomView(){
   document.getElementById('roomView').classList.remove('active');
+  document.querySelector('.tabbar').style.display='';
   // reset
   room.id=null;room.status='waiting';room.diceRolls={};
   clearInterval(roomCountdownInterval);
@@ -1453,13 +1759,138 @@ function tickRoomCountdown(sec){
 // ══════════════════════════════════════
 // LOBBY — RESULT
 // ══════════════════════════════════════
+// ══════════════════════════════════════
+// LOBBY WHEEL (mode 3)
+// ══════════════════════════════════════
+const LW={canvas:null,ctx:null,offset:0,animId:null};
+
+function buildLobbyWheel(){
+  if(!LW.canvas){
+    LW.canvas=document.getElementById('lobbyWheelCanvas');
+    LW.ctx=LW.canvas.getContext('2d');
+  }
+  LW.offset=0;
+  drawLobbyWheel(0);
+  document.getElementById('lwStatus').textContent=
+    room.players.length<room.maxPlayers?'Ожидание игроков…':'Готово к старту!';
+}
+
+function drawLobbyWheel(offset){
+  const cv=LW.canvas,cx=LW.ctx;
+  if(!cv||!cx)return;
+  const W=cv.width,H=cv.height,CX=W/2,CY=H/2,R=W/2-12;
+  cx.clearRect(0,0,W,H);
+  const players=room.players;
+  if(!players.length){
+    cx.beginPath();cx.arc(CX,CY,R,0,Math.PI*2);
+    cx.fillStyle='#111827';cx.fill();
+    cx.strokeStyle='rgba(191,64,255,.2)';cx.lineWidth=2;cx.stroke();
+    cx.fillStyle='var(--muted)';cx.font='13px Exo 2';
+    cx.textAlign='center';cx.textBaseline='middle';
+    cx.fillText('Нет игроков',CX,CY);
+    return;
+  }
+  const slice=(Math.PI*2)/players.length;
+  let ang=offset-Math.PI/2;
+  players.forEach((p,i)=>{
+    const color=COLORS[i%COLORS.length];
+    const end=ang+slice;
+    // sector
+    cx.beginPath();cx.moveTo(CX,CY);cx.arc(CX,CY,R,ang,end);cx.closePath();
+    cx.fillStyle=color;cx.fill();
+    cx.strokeStyle='rgba(0,0,0,.3)';cx.lineWidth=2;cx.stroke();
+    // avatar or letter
+    const mid=ang+slice/2;
+    const ax=CX+Math.cos(mid)*R*.62,ay=CY+Math.sin(mid)*R*.62;
+    const ar=Math.min(22,R*0.28);
+    const imgObj=_canvasAvatarImg[String(p.user_id)];
+    cx.save();
+    cx.beginPath();cx.arc(ax,ay,ar,0,Math.PI*2);cx.closePath();
+    if(imgObj&&ar>7){
+      cx.clip();cx.drawImage(imgObj,ax-ar,ay-ar,ar*2,ar*2);cx.restore();
+      cx.beginPath();cx.arc(ax,ay,ar,0,Math.PI*2);
+      cx.strokeStyle=color;cx.lineWidth=2;cx.stroke();
+    } else {
+      cx.fillStyle='rgba(0,0,0,.55)';cx.fill();cx.restore();
+      cx.beginPath();cx.arc(ax,ay,ar,0,Math.PI*2);
+      cx.strokeStyle=color;cx.lineWidth=2;cx.stroke();
+      cx.fillStyle='#fff';cx.font=`bold ${Math.max(10,ar*.7)}px Exo 2`;
+      cx.textAlign='center';cx.textBaseline='middle';
+      cx.fillText((p.username||p.first_name||'?')[0].toUpperCase(),ax,ay);
+      // trigger fetch
+      if(avatarCache[String(p.user_id)]===undefined){
+        fetchAvatar(p.user_id,()=>{
+          const im=new Image();
+          im.onload=()=>{_canvasAvatarImg[String(p.user_id)]=im;drawLobbyWheel(LW.offset);};
+          im.src=getAvatarURL(p.user_id)||'';
+        });
+      }
+    }
+    ang=end;
+  });
+  // center hub
+  cx.beginPath();cx.arc(CX,CY,24,0,Math.PI*2);
+  cx.fillStyle='#070a12';cx.fill();
+  cx.strokeStyle='rgba(191,64,255,.4)';cx.lineWidth=2;cx.stroke();
+  // hub icon
+  cx.fillStyle='#fff';cx.font='bold 13px Exo 2';
+  cx.textAlign='center';cx.textBaseline='middle';
+  cx.fillText('🎡',CX,CY);
+}
+
+function spinLobbyWheel(winnerUid){
+  if(LW.animId)cancelAnimationFrame(LW.animId);
+  const players=room.players;
+  if(!players.length)return;
+  const wIdx=players.findIndex(p=>String(p.user_id)===String(winnerUid));
+  if(wIdx<0)return;
+
+  document.getElementById('lwStatus').textContent='Крутим колесо…';
+  document.getElementById('lwCountdown').style.display='none';
+
+  const slice=(Math.PI*2)/players.length;
+  // Target: winner sector points UP (at -π/2)
+  // Sector center angle = wIdx*slice + slice/2
+  // We want that angle at top → offset = -(wIdx*slice + slice/2) + small_random_within_sector
+  const noise=(Math.random()-0.5)*slice*0.7; // land anywhere in sector
+  const targetOffset=-(wIdx*slice+slice/2)+noise;
+  // Add several full spins for drama
+  const spins=6+Math.floor(Math.random()*3);
+  const totalRotation=spins*Math.PI*2+targetOffset-LW.offset;
+
+  const duration=5500; // ms — slow, smooth
+  const start=performance.now();
+  const startOff=LW.offset;
+
+  function easeOut(t){return 1-Math.pow(1-t,4);}
+
+  function frame(now){
+    const t=Math.min((now-start)/duration,1);
+    LW.offset=startOff+totalRotation*easeOut(t);
+    drawLobbyWheel(LW.offset);
+    if(t<1){LW.animId=requestAnimationFrame(frame);}
+    else{
+      LW.animId=null;
+      const winner=players[wIdx];
+      document.getElementById('lwStatus').textContent=
+        `🏆 Победитель: @${winner.username||winner.first_name||winner.user_id}`;
+    }
+  }
+  LW.animId=requestAnimationFrame(frame);
+}
+
 function showLobbyResult(result){
   room.status='ended';
   const winUid=result.winner_uid;
   const isMyWin=String(winUid)===String(MY_ID);
 
+  // Wheel animation
+  if(room.type==='wheel'){
+    spinLobbyWheel(winUid);
+    setTimeout(()=>finishLobbyResult(result,isMyWin),6500);
+  }
   // Coin animation
-  if(room.type==='coin'&&result.side){
+  else if(room.type==='coin'&&result.side){
     flipCoin(result.side);
     setTimeout(()=>finishLobbyResult(result,isMyWin),2200);
   }else{
@@ -1664,10 +2095,41 @@ function syncProf(){
   document.getElementById('stWins').textContent=S.gamesWon;
   document.getElementById('stRefs').textContent=S.refs;
 }
+// ── Stars / TON currency toggle ──
+function setCurrency(cur){
+  S.currency=cur;
+  const isTON=cur==='TON';
+  document.getElementById('btnTON').style.cssText=
+    isTON?'background:var(--accent);color:#000;border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:900;cursor:pointer;transition:all .2s'
+         :'background:transparent;color:var(--muted);border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s';
+  document.getElementById('btnSTARS').style.cssText=
+    !isTON?'background:var(--gold);color:#000;border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:900;cursor:pointer;transition:all .2s'
+          :'background:transparent;color:var(--muted);border:none;border-radius:16px;padding:4px 11px;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s';
+  document.getElementById('starsRateRow').style.display=isTON?'none':'block';
+  // update bet button labels
+  S.betValues.forEach((v,i)=>{
+    const btn=document.getElementById('bi'+i);
+    const lbl=document.getElementById('bb'+i);
+    if(!btn||!lbl)return;
+    if(isTON){btn.textContent='T';lbl.textContent=v;}
+    else{btn.textContent='⭐';lbl.textContent=Math.round(v/S.starsRate);}
+  });
+  document.getElementById('balDot').textContent=isTON?'T':'⭐';
+  syncBalance();
+  // fetch current Stars rate from server
+  if(!isTON)send({action:'get_stars_rate'});
+}
+
 function syncBalance(){
-  const b=S.balance!==null?S.balance.toFixed(2):'—';
-  document.getElementById('balDisp').textContent=b;
-  document.getElementById('profBal').textContent=b;
+  if(S.currency==='STARS'&&S.starsBal!==null){
+    document.getElementById('balDisp').textContent=S.starsBal;
+    document.getElementById('starsBalDisp').textContent=S.starsBal;
+  } else {
+    const b=S.balance!==null?S.balance.toFixed(2):'—';
+    document.getElementById('balDisp').textContent=b;
+  }
+  const profBal=document.getElementById('profBal');
+  if(profBal)profBal.textContent=S.balance!==null?S.balance.toFixed(2):'—';
 }
 function loadRefs(){
   document.getElementById('refLink').textContent=`https://t.me/RoyalDuel_bot?start=${MY_ID}`;
@@ -1722,15 +2184,12 @@ function adminRefresh(){
 
 function renderAdminPanel(m){
   adminAllUsers=m.users||[];
-  // Fill commission fields (convert fraction → percent)
   const s=m.settings||{};
-  const pvpPct=Math.round((s.commission_pvp||0)*100);
-  const lobbyPct=Math.round((s.commission_lobby||0)*100);
-  const refPct=Math.round((s.referral_share||0)*100);
-  document.getElementById('adCommPvp').value=pvpPct;
-  document.getElementById('adCommLobby').value=lobbyPct;
-  document.getElementById('adCommRef').value=refPct;
+  document.getElementById('adCommPvp').value=Math.round((s.commission_pvp||0)*100);
+  document.getElementById('adCommLobby').value=Math.round((s.commission_lobby||0)*100);
+  document.getElementById('adCommRef').value=Math.round((s.referral_share||0)*100);
   adminRenderUsers(adminAllUsers);
+  renderAdminPromos(m.promos||[]);
 }
 
 function adminFilterUsers(){
@@ -1793,12 +2252,59 @@ function adminSetReferrer(){
   send({action:'admin_set_referrer',user_id:MY_ID,target_uid:targetUid,new_referrer_id:newRef});
 }
 
+// ══════════════════════════════════════
+// ADMIN — PROMO CODES
+// ══════════════════════════════════════
+function adminPromoTypeChange(){
+  const t=document.getElementById('adPromoType').value;
+  document.getElementById('adPromoCooldown').style.display=t==='cooldown'?'block':'none';
+}
+
+function adminCreatePromo(){
+  const code=document.getElementById('adPromoCode').value.trim().toUpperCase();
+  const ton=parseFloat(document.getElementById('adPromoTon').value);
+  const uses=parseInt(document.getElementById('adPromoUses').value);
+  const type=document.getElementById('adPromoType').value;
+  const cooldown=parseInt(document.getElementById('adPromoCooldown').value)||0;
+  const msg=document.getElementById('adPromoMsg');
+  if(!code){msg.style.color='#ff4444';msg.textContent='Введите код';return;}
+  if(isNaN(ton)||ton<=0){msg.style.color='#ff4444';msg.textContent='Укажите сумму TON';return;}
+  if(isNaN(uses)||uses<=0){msg.style.color='#ff4444';msg.textContent='Укажите кол-во активаций';return;}
+  if(type==='cooldown'&&cooldown<=0){msg.style.color='#ff4444';msg.textContent='Укажите кулдаун в секундах';return;}
+  msg.style.color='var(--muted)';msg.textContent='Создаю…';
+  send({action:'admin_create_promo',user_id:MY_ID,code,ton,max_uses:uses,promo_type:type,cooldown_sec:cooldown});
+}
+
+function adminDeletePromo(code){
+  if(!confirm(`Удалить промокод ${code}?`))return;
+  send({action:'admin_delete_promo',user_id:MY_ID,code});
+}
+
+function renderAdminPromos(promos){
+  const el=document.getElementById('adPromoList');
+  if(!el)return;
+  if(!promos||!promos.length){
+    el.innerHTML='<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px">Нет активных промокодов</div>';
+    return;
+  }
+  const typeLabel={once_per_user:'1×/user',unlimited:'∞',cooldown:'кулдаун'};
+  el.innerHTML=promos.map(p=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:10px">
+      <div style="font-family:monospace;font-size:13px;font-weight:900;color:var(--accent);min-width:90px">${p.code}</div>
+      <div style="flex:1;font-size:11px;color:var(--muted);line-height:1.4">
+        <div>${p.ton} TON · ${p.used_count}/${p.max_uses} акт.</div>
+        <div>${typeLabel[p.promo_type]||p.promo_type}${p.cooldown_sec?` · ${p.cooldown_sec}с`:''}</div>
+      </div>
+      <button onclick="adminDeletePromo('${p.code}')" style="background:rgba(255,68,68,.12);border:1px solid rgba(255,68,68,.3);border-radius:8px;padding:5px 10px;color:#ff4444;font-size:11px;cursor:pointer">✕</button>
+    </div>`).join('');
+}
+
 // Handle admin_result
 function handleAdminResult(m){
-  // Update status messages
   const balMsg=document.getElementById('adBalMsg');
   const setMsg=document.getElementById('adSettMsg');
   const refMsg=document.getElementById('adRefMsg');
+  const promoMsg=document.getElementById('adPromoMsg');
   if(m.ok){
     if(m.new_balance!==undefined){
       balMsg.style.color='#00e676';
@@ -1810,12 +2316,25 @@ function handleAdminResult(m){
       setMsg.textContent=`✅ ${m.key} = ${(m.value*100).toFixed(0)}%`;
     } else if(m.target_uid!==undefined){
       refMsg.style.color='#00e676';
-      refMsg.textContent=`✅ Реферер обновлён`;
+      refMsg.textContent='✅ Реферер обновлён';
+    } else if(m.promo_action==='created'){
+      promoMsg.style.color='#00e676';
+      promoMsg.textContent=`✅ Промокод ${m.code} создан`;
+      document.getElementById('adPromoCode').value='';
+      document.getElementById('adPromoTon').value='';
+      document.getElementById('adPromoUses').value='';
+    } else if(m.promo_action==='deleted'){
+      promoMsg.style.color='#00e676';
+      promoMsg.textContent=`✅ Промокод ${m.code} удалён`;
     }
     setTimeout(()=>adminRefresh(),600);
   } else {
     const errMsg=m.error||'Ошибка';
-    if(balMsg)balMsg.style.color='#ff4444',balMsg.textContent='❌ '+errMsg;
+    if(m.promo_action){
+      if(promoMsg){promoMsg.style.color='#ff4444';promoMsg.textContent='❌ '+errMsg;}
+    } else {
+      if(balMsg){balMsg.style.color='#ff4444';balMsg.textContent='❌ '+errMsg;}
+    }
   }
 }
 
@@ -1832,6 +2351,10 @@ function requireAuth(){
 // PAGE NAV
 // ══════════════════════════════════════
 function setPage(p){
+  // Block tab switching while inside a lobby room
+  if(room.id && document.getElementById('roomView')?.classList.contains('active')){
+    toast('Сначала закройте игру ←','red');return;
+  }
   document.querySelectorAll('.page').forEach(el=>el.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));
   if(p==='hist'){document.getElementById('histPage').classList.add('active');send({action:'get_pvp_history'});return;}
