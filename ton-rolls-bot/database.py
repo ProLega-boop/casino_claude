@@ -90,6 +90,23 @@ def init_db() -> None:
             seed_hash   TEXT,
             created_at  TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            code         TEXT PRIMARY KEY,
+            ton          REAL NOT NULL,
+            max_uses     INTEGER NOT NULL,
+            used_count   INTEGER DEFAULT 0,
+            promo_type   TEXT DEFAULT 'once_per_user',
+            cooldown_sec INTEGER DEFAULT 0,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS promo_uses (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            code         TEXT NOT NULL,
+            user_id      INTEGER NOT NULL,
+            used_at      TEXT DEFAULT (datetime('now'))
+        );
         """)
 
 
@@ -534,3 +551,82 @@ def refund_all_active_bets() -> list[dict]:
                 (row["room_id"],)
             )
     return refunds
+
+
+# ── Promo codes ─────────────────────────────────────────────────────────────
+
+def create_promo(code: str, ton: float, max_uses: int,
+                 promo_type: str = "once_per_user",
+                 cooldown_sec: int = 0) -> bool:
+    """Create a new promo code. Returns False if code already exists."""
+    with _conn() as db:
+        try:
+            db.execute(
+                "INSERT INTO promo_codes (code,ton,max_uses,promo_type,cooldown_sec) VALUES (?,?,?,?,?)",
+                (code.upper(), ton, max_uses, promo_type, cooldown_sec)
+            )
+            return True
+        except Exception:
+            return False
+
+
+def delete_promo(code: str) -> bool:
+    with _conn() as db:
+        db.execute("DELETE FROM promo_codes WHERE code=?", (code.upper(),))
+        db.execute("DELETE FROM promo_uses WHERE code=?", (code.upper(),))
+        return True
+
+
+def get_all_promos() -> list[dict]:
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM promo_codes ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def use_promo(code: str, user_id: int) -> dict:
+    """
+    Try to activate promo for user.
+    Returns {"ok": True, "ton": amount} or {"ok": False, "error": "..."}.
+    """
+    import time as _time
+    from datetime import datetime as _dt, timedelta as _td
+    code = code.upper()
+    with _conn() as db:
+        promo = db.execute(
+            "SELECT * FROM promo_codes WHERE code=?", (code,)
+        ).fetchone()
+        if not promo:
+            return {"ok": False, "error": "Промокод не найден"}
+        if promo["used_count"] >= promo["max_uses"]:
+            return {"ok": False, "error": "Промокод уже использован максимальное число раз"}
+
+        ptype = promo["promo_type"]
+        uses = db.execute(
+            "SELECT used_at FROM promo_uses WHERE code=? AND user_id=? ORDER BY used_at DESC LIMIT 1",
+            (code, user_id)
+        ).fetchone()
+
+        if ptype == "once_per_user" and uses:
+            return {"ok": False, "error": "Вы уже активировали этот промокод"}
+
+        if ptype == "cooldown" and uses:
+            last = _dt.fromisoformat(uses["used_at"])
+            diff = (_dt.utcnow() - last).total_seconds()
+            if diff < promo["cooldown_sec"]:
+                rem = int(promo["cooldown_sec"] - diff)
+                return {"ok": False, "error": f"Подождите ещё {rem} сек."}
+
+        # All checks passed — apply
+        db.execute(
+            "INSERT INTO promo_uses (code,user_id) VALUES (?,?)", (code, user_id)
+        )
+        db.execute(
+            "UPDATE promo_codes SET used_count=used_count+1 WHERE code=?", (code,)
+        )
+        db.execute(
+            "UPDATE users SET balance=balance+? WHERE user_id=?", (promo["ton"], user_id)
+        )
+        user = db.execute("SELECT balance FROM users WHERE user_id=?", (user_id,)).fetchone()
+        return {"ok": True, "ton": promo["ton"], "balance": user["balance"]}
