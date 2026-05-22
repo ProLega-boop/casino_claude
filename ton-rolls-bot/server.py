@@ -433,38 +433,63 @@ class LobbyManager:
 
     async def _resolve_darts(self, room_id, room, players, seed, round_num=0):
         player_ids = [str(p["user_id"]) for p in players]
+        is_bonus = round_num > 0
 
-        # Announce throw is coming
+        # Announce round start
         await mgr.broadcast_room(room_id, {
-            "type": "darts_throwing",
+            "type": "darts_round_start",
             "room_id": room_id,
             "round": round_num,
-            "player_count": len(players),
+            "is_bonus": is_bonus,
+            "player_ids": player_ids,
         })
-        await asyncio.sleep(2)  # suspense pause
+        await asyncio.sleep(1.5)
 
+        # Compute all throws upfront
         throws = gl.throw_darts(player_ids, seed, round_num)
-        outcome = gl.resolve_darts(throws)
 
-        # Broadcast throws with round info
+        # Send throws one dart at a time (3 per player)
+        # Order: player1 throw1, player1 throw2, player1 throw3,
+        #        player2 throw1, player2 throw2, player2 throw3, ...
+        for uid in player_ids:
+            player_data = throws[uid]
+            running_total = 0
+            for t_idx, throw in enumerate(player_data["throws"]):
+                running_total += throw["score"]
+                await mgr.broadcast_room(room_id, {
+                    "type": "darts_throw",
+                    "room_id": room_id,
+                    "round": round_num,
+                    "uid": uid,
+                    "throw_index": t_idx,
+                    "throw": throw,
+                    "running_total": running_total,
+                })
+                await asyncio.sleep(1.2)  # delay between throws
+
+            # Brief pause between players
+            await asyncio.sleep(0.6)
+
+        # All throws done - send summary
+        outcome = gl.resolve_darts(throws)
         await mgr.broadcast_room(room_id, {
-            "type": "darts_result",
+            "type": "darts_round_end",
             "room_id": room_id,
+            "round": round_num,
             "throws": throws,
-            "winners": outcome["tie_uids"] if outcome["round_restart"] else [outcome["final_winner"]],
             "final_winner": outcome["final_winner"],
             "round_restart": outcome["round_restart"],
-            "round": round_num,
+            "tie_uids": outcome["tie_uids"] if outcome["round_restart"] else [],
         })
 
         if outcome["round_restart"]:
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
             tied_players = [p for p in players if str(p["user_id"]) in outcome["tie_uids"]]
             await self._resolve_darts(room_id, room, tied_players, seed, round_num + 1)
             return
 
         winner_uid = outcome["final_winner"]
-        await asyncio.sleep(3)  # show result before finishing
+        await asyncio.sleep(2.5)
         await self._finish_room(room_id, room, players, seed, winner_uid,
                                 {"throws": throws, "round": round_num},
                                 game_type="darts")
@@ -1039,4 +1064,4 @@ async def startup():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=config.PORT, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=config.PORT, reload=False)0.0", port=config.PORT, reload=False)
