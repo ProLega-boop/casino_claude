@@ -127,3 +127,65 @@ def verify_lobby(seed_hex: str, hash_hex: str,
         winners, max_val = resolve_dice(rolls)
         return {"ok": True, "rolls": rolls, "winners": winners, "max": max_val}
     return {"ok": False, "error": "Unknown game type"}
+
+
+# ── Darts ──────────────────────────────────────────────────────────────────
+
+def _dart_throw(seed_hex: str, uid: str, throw_index: int) -> dict:
+    """Single dart throw. Returns {x, y, score, dist}."""
+    import hashlib
+    h = hashlib.sha256(f"{seed_hex}:dart:{uid}:{throw_index}".encode()).hexdigest()
+    bx = int(h[0:4], 16) / 65535
+    by = int(h[4:8], 16) / 65535
+    x = bx * 2 - 1
+    y = by * 2 - 1
+    dist = (x**2 + y**2) ** 0.5
+    if dist > 1.0:
+        score = 0
+    elif dist <= 0.08:
+        score = 50
+    elif dist <= 0.15:
+        score = 25
+    elif dist <= 0.35:
+        score = 15
+    elif dist <= 0.55:
+        score = 10
+    elif dist <= 0.75:
+        score = 5
+    else:
+        score = 1
+    return {"x": round(x, 4), "y": round(y, 4),
+            "score": score, "dist": round(dist, 4)}
+
+
+def throw_darts(player_ids: list, seed_hex: str, round_num: int = 0) -> dict:
+    """
+    Each player gets 3 throws per round.
+    Returns {uid: {"throws": [...], "total": int}}
+    where each throw is {x, y, score, dist}.
+    """
+    results = {}
+    for uid in player_ids:
+        throws = []
+        total = 0
+        for t in range(3):
+            throw_idx = round_num * 3 + t
+            td = _dart_throw(seed_hex, str(uid), throw_idx)
+            throws.append(td)
+            total += td["score"]
+        results[str(uid)] = {"throws": throws, "total": total}
+    return results
+
+
+def resolve_darts(throws: dict) -> dict:
+    """
+    Compare total scores. Unique top score = winner.
+    Tied top scores = round_restart with only those players.
+    """
+    if not throws:
+        return {"final_winner": None, "tie_uids": [], "round_restart": False}
+    max_score = max(v["total"] for v in throws.values())
+    winners = [uid for uid, v in throws.items() if v["total"] == max_score]
+    if len(winners) == 1:
+        return {"final_winner": winners[0], "tie_uids": [], "round_restart": False}
+    return {"final_winner": None, "tie_uids": winners, "round_restart": True}
