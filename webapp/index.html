@@ -1266,20 +1266,14 @@ function handleMsg(m){
       } else toast(m.error||'Нельзя покинуть','red');
       break;
 
-    case 'darts_throwing':
-      if(room.id===m.room_id){
-        document.getElementById('dartsStatus').textContent=`Раунд ${m.round+1}: готовимся к броску…`;
-        const _dcv=document.getElementById('dartsCanvas');
-        if(_dcv)_dcv.style.filter='brightness(1.3)';
-        setTimeout(()=>{const e=document.getElementById('dartsCanvas');if(e)e.style.filter='';},1800);
-      }break;
+    case 'darts_round_start':
+      if(room.id===m.room_id) handleDartsRoundStart(m);break;
 
-    case 'darts_result':
-      if(room.id===m.room_id){
-        handleDartsResult(m);
-        if(m.final_winner)showLobbyResult(m);
-      }
-      break;
+    case 'darts_throw':
+      if(room.id===m.room_id) handleDartsThrow(m);break;
+
+    case 'darts_round_end':
+      if(room.id===m.room_id) handleDartsRoundEnd(m);break;
 
     case 'lobby_room_update':
       if(room.id===m.room?.room_id){
@@ -2198,172 +2192,266 @@ function handleLobbyWheelSpin(m){
 }
 
 // ══════════════════════════════════════
-// DARTS (Lobby mode 4)
+// DARTS BOARD (Lobby mode 4)
 // ══════════════════════════════════════
-// ══════════════════════════════════════
-// DARTS BOARD (Lobby)
-// ══════════════════════════════════════
-let _dartsThrows = {}; // uid -> {x,y,score,dist}
-let _dartsRound  = 0;
-let _dartsActivePlayers = [];
+let _dartsState = {
+  round: 0,
+  isBonus: false,
+  activePlayers: [],       // [uid, ...]
+  scores: {},              // uid -> total score this round
+  throws: {},              // uid -> [throw, throw, throw]
+  throwCount: {},          // uid -> how many thrown so far
+};
 
 function buildDartsBoard(){
-  _dartsThrows = {};
-  _dartsRound  = 0;
-  _dartsActivePlayers = room.players.map(p=>String(p.user_id));
-  drawDartsBoard({});
-  document.getElementById('dartsStatus').textContent = 'Ожидание игроков…';
-  document.getElementById('dartsThrows').innerHTML = '';
+  _dartsState = {
+    round:0, isBonus:false,
+    activePlayers: room.players.map(p=>String(p.user_id)),
+    scores:{}, throws:{}, throwCount:{},
+  };
+  _initDartsCanvas();
+  _drawDartsBoard({});
+  _renderDartsScoreboard();
+  const st = document.getElementById('dartsStatus');
+  if(st) st.textContent = 'Ожидание игроков…';
 }
 
-function drawDartsBoard(throws){
+function _initDartsCanvas(){
   const cv = document.getElementById('dartsCanvas');
   if(!cv) return;
   const dpr = window.devicePixelRatio||1;
-  cv.width  = 220*dpr; cv.height = 220*dpr;
+  cv.width=220*dpr; cv.height=220*dpr;
   cv.style.width='220px'; cv.style.height='220px';
-  const cx2 = cv.getContext('2d');
-  cx2.scale(dpr,dpr);
-  cx2.imageSmoothingEnabled = true;
-  cx2.imageSmoothingQuality = 'high';
+  const cx = cv.getContext('2d');
+  cx.scale(dpr,dpr);
+  cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality='high';
+}
 
-  const W=220, H=220, CX=110, CY=110, R=104;
+function _drawDartsBoard(allThrows){
+  const cv = document.getElementById('dartsCanvas');
+  if(!cv) return;
+  const cx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio||1;
+  cx.clearRect(0,0,cv.width,cv.height);
 
-  // Rings (outer → inner): miss, 1, 5, 10, 15, bull, bullseye
-  const rings = [
-    {r:R,     color:'#1a1a2e'},
-    {r:R*0.75,color:'#2a1a1a'},
-    {r:R*0.55,color:'#1a2a1a'},
-    {r:R*0.35,color:'#2a1a1a'},
-    {r:R*0.15,color:'#1a2a1a'},
-    {r:R*0.08,color:'#1a1a2e'},
+  const W=220, CX=110, CY=110, R=104;
+
+  // Rings from outside in
+  const rings=[
+    {r:R,     fill:'#1a1228', stroke:'#3D9EFF'},
+    {r:R*.75, fill:'#1a2a1a', stroke:'#66BB6A'},
+    {r:R*.55, fill:'#2a1a1a', stroke:'#EF5350'},
+    {r:R*.35, fill:'#1a2a1a', stroke:'#FFA726'},
+    {r:R*.15, fill:'#2a1a2a', stroke:'#AB47BC'},
+    {r:R*.08, fill:'#2a2a00', stroke:'#FFD700'},
   ];
-
-  // Draw rings
-  rings.forEach(ring=>{
-    cx2.beginPath(); cx2.arc(CX,CY,ring.r,0,Math.PI*2);
-    cx2.fillStyle = ring.color; cx2.fill();
-  });
-
-  // Ring borders
-  const ringR = [R, R*0.75, R*0.55, R*0.35, R*0.15, R*0.08];
-  const ringColors = ['#3D9EFF','#66BB6A','#EF5350','#FFA726','#AB47BC','#FFD700'];
-  ringR.forEach((r,i)=>{
-    cx2.beginPath(); cx2.arc(CX,CY,r,0,Math.PI*2);
-    cx2.strokeStyle = ringColors[i]||'#fff';
-    cx2.lineWidth   = i===ringR.length-1?3:1.5;
-    cx2.stroke();
+  rings.forEach(rg=>{
+    cx.beginPath(); cx.arc(CX,CY,rg.r,0,Math.PI*2);
+    cx.fillStyle=rg.fill; cx.fill();
+    cx.strokeStyle=rg.stroke; cx.lineWidth=1.5; cx.stroke();
   });
 
   // Score labels
-  const labels = [{r:R*0.87,txt:'1'},{r:R*0.65,txt:'5'},{r:R*0.45,txt:'10'},
-                  {r:R*0.25,txt:'15'},{r:R*0.115,txt:'25'},{r:0,txt:'50'}];
-  cx2.textAlign='center'; cx2.textBaseline='middle';
+  const labels=[{r:R*.87,txt:'1'},{r:R*.65,txt:'5'},{r:R*.45,txt:'10'},
+                {r:R*.25,txt:'15'},{r:R*.115,txt:'25'},{r:4,txt:'50'}];
+  cx.textAlign='center'; cx.textBaseline='middle';
   labels.forEach(l=>{
-    cx2.font=`700 ${l.txt==='50'?11:9}px 'Exo 2',sans-serif`;
-    cx2.fillStyle='rgba(255,255,255,.45)';
-    cx2.fillText(l.txt, CX+l.r, CY);
+    cx.font=`700 ${l.txt==='50'?11:9}px Exo 2`;
+    cx.fillStyle='rgba(255,255,255,.5)';
+    cx.fillText(l.txt, CX+l.r, CY);
   });
 
-  // Draw darts (player throws)
-  Object.entries(throws).forEach(([uid, th], i)=>{
-    const dx = CX + th.x * R;
-    const dy = CY + th.y * R;
-    const color = COLORS[i%COLORS.length];
+  // Draw each dart with flying animation support
+  Object.entries(allThrows).forEach(([uid, throwList])=>{
+    const playerIdx = _dartsState.activePlayers.indexOf(uid);
+    const baseColor = COLORS[playerIdx%COLORS.length] || '#3D9EFF';
+    throwList.forEach((th,ti)=>{
+      if(!th||th._animating) return;
+      const dx = CX + th.x * R;
+      const dy = CY + th.y * R;
+      const ar = 7;
 
-    // Shadow
-    cx2.beginPath(); cx2.arc(dx+1,dy+2,7,0,Math.PI*2);
-    cx2.fillStyle='rgba(0,0,0,.4)'; cx2.fill();
+      // Shadow
+      cx.beginPath(); cx.arc(dx+1,dy+1.5,ar+1,0,Math.PI*2);
+      cx.fillStyle='rgba(0,0,0,.5)'; cx.fill();
 
-    // Dart circle
-    cx2.beginPath(); cx2.arc(dx,dy,7,0,Math.PI*2);
-    cx2.fillStyle = color; cx2.fill();
-    cx2.strokeStyle='#fff'; cx2.lineWidth=1.5; cx2.stroke();
+      // Dart body
+      cx.beginPath(); cx.arc(dx,dy,ar,0,Math.PI*2);
+      cx.fillStyle=baseColor; cx.fill();
+      cx.strokeStyle='rgba(255,255,255,.8)'; cx.lineWidth=1.5; cx.stroke();
 
-    // Avatar inside dart circle
-    const imgObj = _canvasAvatarImg[uid];
-    if(imgObj){
-      cx2.save();
-      cx2.beginPath(); cx2.arc(dx,dy,6,0,Math.PI*2); cx2.clip();
-      cx2.imageSmoothingEnabled=true; cx2.imageSmoothingQuality='high';
-      cx2.drawImage(imgObj,dx-6,dy-6,12,12);
-      cx2.restore();
-      cx2.beginPath(); cx2.arc(dx,dy,6,0,Math.PI*2);
-      cx2.strokeStyle=color; cx2.lineWidth=1.5; cx2.stroke();
-    } else {
-      cx2.fillStyle='#fff';
-      cx2.font=`700 7px 'Exo 2'`;
-      cx2.textAlign='center'; cx2.textBaseline='middle';
-      // get player name initial
-      const p = room.players.find(pp=>String(pp.user_id)===uid);
-      cx2.fillText((p?.username||p?.first_name||'?')[0].toUpperCase(), dx, dy);
-      fetchAvatar(uid, ()=>{
-        const im=new Image();
-        im.onload=()=>{_canvasAvatarImg[uid]=im; drawDartsBoard(throws);};
-        im.src=getAvatarURL(uid)||'';
-      });
-    }
+      // Throw number inside
+      cx.fillStyle='#000'; cx.font=`900 7px Exo 2`;
+      cx.textAlign='center'; cx.textBaseline='middle';
+      cx.fillText(ti+1, dx, dy);
+
+      // Avatar clip
+      const imgObj = _canvasAvatarImg[uid];
+      if(imgObj){
+        cx.save();
+        cx.beginPath(); cx.arc(dx,dy,ar,0,Math.PI*2); cx.clip();
+        cx.drawImage(imgObj,dx-ar,dy-ar,ar*2,ar*2);
+        cx.restore();
+        cx.beginPath(); cx.arc(dx,dy,ar,0,Math.PI*2);
+        cx.strokeStyle=baseColor; cx.lineWidth=1.5; cx.stroke();
+      }
+    });
   });
 }
 
-function renderDartsThrows(throws, activePlayers){
+function _renderDartsScoreboard(){
   const el = document.getElementById('dartsThrows');
   if(!el) return;
-  const scoreLabel = {50:'🎯 Bullseye!',25:'🟢 Bull',15:'⚡ 15',10:'🔵 10',5:'🟡 5',1:'⚪ 1',0:'❌ Мимо'};
-  el.innerHTML = activePlayers.map((uid,i)=>{
-    const th   = throws[uid];
-    const p    = room.players.find(pp=>String(pp.user_id)===uid);
-    const name = p?.username ? '@'+p.username : (p?.first_name||'Player');
-    const av   = avatarHTML(uid, name, COLORS[i%COLORS.length], '28px');
-    const score = th ? `<span style="font-weight:900;color:var(--accent)">${th.score}</span> <span style="font-size:10px;color:var(--muted)">${scoreLabel[th.score]||''}</span>` : '<span style="color:var(--muted)">…</span>';
-    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:10px">
+  const players = room.players.filter(p=>
+    _dartsState.activePlayers.includes(String(p.user_id))
+  );
+  const SCORE_LABEL={50:'🎯 Bullseye!',25:'🟢 Bull',15:'⚡ 15pt',
+                     10:'🔵 10pt',5:'🟡 5pt',1:'⚪ 1pt',0:'❌ Мимо'};
+  el.innerHTML = players.map((p,i)=>{
+    const uid = String(p.user_id);
+    const name = p.username?'@'+p.username:(p.first_name||'Player');
+    const av = avatarHTML(uid,name,COLORS[i%COLORS.length],'30px');
+    const throws = _dartsState.throws[uid]||[];
+    const total = _dartsState.scores[uid]||0;
+    const throwDots = [0,1,2].map(t=>{
+      const th=throws[t];
+      if(!th) return `<span style="display:inline-block;width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,.07);border:1px dashed rgba(255,255,255,.2);font-size:10px;line-height:28px;text-align:center;color:var(--muted)">–</span>`;
+      const slabel=SCORE_LABEL[th.score]||th.score;
+      const color=th.score>=50?'#FFD700':th.score>=25?'#AB47BC':th.score>=15?'#EF5350':th.score>=10?'#3D9EFF':th.score>=5?'#FFA726':'rgba(255,255,255,.3)';
+      return `<span title="${slabel}" style="display:inline-block;width:28px;height:28px;border-radius:8px;background:${color}22;border:1px solid ${color};font-size:11px;font-weight:900;line-height:28px;text-align:center;color:${color}">${th.score}</span>`;
+    }).join('');
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:12px">
       ${av}
-      <div style="flex:1;font-size:13px">${name}</div>
-      <div style="text-align:right;font-size:13px">${score}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+        <div style="display:flex;gap:4px;margin-top:4px">${throwDots}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:18px;font-weight:900;color:var(--accent);line-height:1">${total}</div>
+        <div style="font-size:9px;color:var(--muted)">очков</div>
+      </div>
     </div>`;
   }).join('');
 }
 
-function handleDartsResult(m){
-  _dartsThrows = m.throws || {};
-  const status = document.getElementById('dartsStatus');
+// ── Dart fly animation ──
+function _animateDartFly(uid, throw_data, onDone){
+  const cv = document.getElementById('dartsCanvas');
+  if(!cv){onDone();return;}
+  const R=104, CX=110, CY=110;
+  const targetX = CX + throw_data.x * R;
+  const targetY = CY + throw_data.y * R;
+  // Start from edge of board in the direction of throw
+  const angle = Math.atan2(throw_data.y, throw_data.x);
+  let startX = CX + Math.cos(angle)*R*1.4;
+  let startY = CY + Math.sin(angle)*R*1.4;
 
-  // Animate dart arrivals one by one
-  const uids = Object.keys(_dartsThrows);
-  let i = 0;
-  const partialThrows = {};
+  const dur = 500; // ms
+  const t0 = performance.now();
+  function frame(now){
+    const p = Math.min((now-t0)/dur,1);
+    const ease = 1-Math.pow(1-p,3);
+    const cx2 = cv.getContext('2d');
+    const curX = startX + (targetX-startX)*ease;
+    const curY = startY + (targetY-startY)*ease;
 
-  function dropNext(){
-    if(i >= uids.length){
-      // all dropped
-      renderDartsThrows(_dartsThrows, _dartsActivePlayers);
-      if(m.round_restart){
-        // Tie — show eliminated and continue
-        status.textContent = `🔁 Раунд ${_dartsRound+1}: ничья! Продолжают ${m.tie_uids.length} игроков…`;
-        setTimeout(()=>{
-          _dartsActivePlayers = m.tie_uids.map(String);
-          _dartsRound++;
-          _dartsThrows = {};
-          drawDartsBoard({});
-          renderDartsThrows({}, _dartsActivePlayers);
-          status.textContent = `Раунд ${_dartsRound+1}: перебросок…`;
-        }, 2800);
-      } else if(m.final_winner){
-        const wp = room.players.find(p=>String(p.user_id)===String(m.final_winner));
-        const wname = wp?.username ? '@'+wp.username : (wp?.first_name||'Победитель');
-        status.textContent = `🏆 ${wname} ближе всех!`;
-      }
-      return;
-    }
-    const uid = uids[i++];
-    partialThrows[uid] = _dartsThrows[uid];
-    drawDartsBoard(partialThrows);
-    renderDartsThrows(partialThrows, _dartsActivePlayers);
-    setTimeout(dropNext, 600);
+    // Redraw board without this dart, then draw flying dart
+    _drawCurrentBoard();
+
+    // Flying dart line
+    cx2.beginPath();
+    cx2.moveTo(startX, startY);
+    cx2.lineTo(curX, curY);
+    cx2.strokeStyle='rgba(255,200,50,.6)';
+    cx2.lineWidth=2;
+    cx2.stroke();
+
+    // Dart tip
+    const playerIdx = _dartsState.activePlayers.indexOf(uid);
+    const color = COLORS[playerIdx%COLORS.length]||'#3D9EFF';
+    cx2.beginPath(); cx2.arc(curX,curY,5,0,Math.PI*2);
+    cx2.fillStyle=color; cx2.fill();
+
+    if(p<1){ requestAnimationFrame(frame); }
+    else { onDone(); }
   }
+  requestAnimationFrame(frame);
+}
 
-  status.textContent = `Раунд ${_dartsRound+1}: броски…`;
-  setTimeout(dropNext, 400);
+let _currentBoardThrows = {};
+function _drawCurrentBoard(){
+  _drawDartsBoard(_currentBoardThrows);
+}
+
+// ── WS Handlers ──
+function handleDartsRoundStart(m){
+  const st=document.getElementById('dartsStatus');
+  if(st) st.textContent = m.is_bonus
+    ? `🔁 Бонусные броски! Ничья — перебросок…`
+    : `Раунд ${m.round+1}: начинаем!`;
+
+  // Reset scores for this round
+  _dartsState.round = m.round;
+  _dartsState.isBonus = m.is_bonus;
+  m.player_ids.forEach(uid=>{
+    _dartsState.scores[uid] = 0;
+    _dartsState.throws[uid] = [];
+    _dartsState.throwCount[uid] = 0;
+  });
+  _dartsState.activePlayers = m.player_ids;
+  _currentBoardThrows = {};
+  _drawDartsBoard({});
+  _renderDartsScoreboard();
+}
+
+function handleDartsThrow(m){
+  const uid = String(m.uid);
+  const th = m.throw;
+
+  // Init if needed
+  if(!_dartsState.throws[uid]) _dartsState.throws[uid]=[];
+  if(!_dartsState.scores[uid]) _dartsState.scores[uid]=0;
+
+  // Animate dart flying to target
+  _animateDartFly(uid, th, ()=>{
+    // Land — add to state
+    _dartsState.throws[uid].push(th);
+    _dartsState.scores[uid] = m.running_total;
+
+    if(!_currentBoardThrows[uid]) _currentBoardThrows[uid]=[];
+    _currentBoardThrows[uid].push(th);
+    _drawCurrentBoard();
+    _renderDartsScoreboard();
+
+    // Score flash
+    const st=document.getElementById('dartsStatus');
+    const pobj = room.players.find(p=>String(p.user_id)===uid);
+    const pname = pobj?.username?'@'+pobj.username:(pobj?.first_name||uid);
+    const scoreLabel={50:'🎯 BULLSEYE!',25:'🟢 Bull (25)',15:'⚡ 15',10:'🔵 10',5:'🟡 5',1:'⚪ 1',0:'❌ Мимо'};
+    if(st) st.textContent=`${pname}: бросок ${m.throw_index+1} — ${scoreLabel[th.score]||th.score} | Итого: ${m.running_total}`;
+  });
+}
+
+function handleDartsRoundEnd(m){
+  const st=document.getElementById('dartsStatus');
+
+  setTimeout(()=>{
+    if(m.round_restart){
+      if(st) st.textContent=`🔁 Ничья! Бонусные броски для ${m.tie_uids.length} игроков…`;
+    } else if(m.final_winner){
+      const wp=room.players.find(p=>String(p.user_id)===String(m.final_winner));
+      const wname=wp?.username?'@'+wp.username:(wp?.first_name||'Победитель');
+      // Show scores summary
+      const totals = Object.entries(m.throws)
+        .sort((a,b)=>b[1].total-a[1].total)
+        .map(([uid,v])=>{
+          const pp=room.players.find(p=>String(p.user_id)===uid);
+          const n=pp?.username?'@'+pp.username:(pp?.first_name||uid);
+          return `${n}: ${v.total}`;
+        }).join(' | ');
+      if(st) st.textContent=`🏆 ${wname} победил! ${totals}`;
+    }
+  }, 200);
 }
 
 function showLobbyResult(result){
