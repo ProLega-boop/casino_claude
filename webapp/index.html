@@ -2068,8 +2068,8 @@ function sendEmoji(emoji){
     document.querySelectorAll('.emo-btn').forEach(b=>b.classList.remove('cooldown'));
   },3000);
   send({action:'pvp_emoji',user_id:MY_ID,emoji,username:MY_NAME});
-  // Show own emoji flying immediately
-  spawnFloatingEmoji(emoji);
+  // Show flying emoji AND update reaction bar
+  showReaction(MY_ID, emoji, MY_NAME);
 }
 
 function spawnFloatingEmoji(emoji){
